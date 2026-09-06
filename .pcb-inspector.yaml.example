@@ -1,0 +1,29 @@
+# ==============================================================================
+# ⌖ .pcb-inspector.yaml (Project-Level Override Example)
+# ==============================================================================
+# Place this file in your individual KiCad project folder (e.g. alongside
+# your .kicad_pro file) to override the global defaults from 'rules.yaml'.
+#
+# Only include the fields you want to override for this specific board!
+# ==============================================================================
+
+# Example: High-density RF / MCU board with tighter decoupling requirement
+max_decoupling_distance_mm: 2.5
+
+# Example: Higher power board requiring thicker traces on power rails
+min_power_trace_width_mm: 0.50
+
+# Example: Strict differential pair length matching (e.g. USB 2.0 High-Speed / PCIe)
+max_diff_pair_skew_mm: 0.10
+
+# Example: Strict CI failure on any WARNING or CRITICAL finding
+fail_on: "WARNING"
+
+# Example: Per-rule toggles and custom thresholds
+custom_rules:
+  # Disable ground plane check for 2-layer single-sided test jig
+  HEUR-GND-001:
+    enabled: true
+  # Tighter limit for switching loop
+  HEUR-DCDC-001:
+    max_loop_area_mm2: 20.0

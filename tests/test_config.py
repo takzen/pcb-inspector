@@ -40,3 +40,21 @@ def test_config_load_from_yaml(tmp_path: Path) -> None:
 def test_config_load_missing_file_returns_default() -> None:
     cfg = InspectorConfig.load(Path("non_existent_file_xyz.yaml"))
     assert cfg.max_decoupling_distance_mm == 3.5
+
+
+def test_config_load_project_dir_override(tmp_path: Path) -> None:
+    proj_dir = tmp_path / "my_project"
+    proj_dir.mkdir()
+    override_file = proj_dir / ".pcb-inspector.yaml"
+    override_file.write_text(
+        """
+        max_decoupling_distance_mm: 1.8
+        fail_on: SUGGESTION
+        """,
+        encoding="utf-8",
+    )
+
+    cfg = InspectorConfig.load(project_dir=proj_dir)
+    assert cfg.max_decoupling_distance_mm == 1.8
+    assert cfg.fail_on == Severity.SUGGESTION
+

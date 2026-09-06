@@ -114,7 +114,8 @@ def check(
         raise typer.Exit(code=1) from None
 
     # Load configuration
-    cfg = InspectorConfig.load(config_file)
+    project_dir = project_path if project_path.is_dir() else project_path.parent
+    cfg = InspectorConfig.load(config_file, project_dir=project_dir)
     cfg.fail_on = threshold
 
     console.print(f"[bold]Starting inspection of:[/bold] [cyan]{project_path}[/cyan]")

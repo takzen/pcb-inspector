@@ -62,29 +62,40 @@ class InspectorConfig(BaseModel):
     )
 
     @classmethod
-    def load(cls, config_path: Path | str | None = None) -> InspectorConfig:
-        """Load configuration from a YAML file, or default if None or file not found."""
-        if config_path is None:
-            # Check default candidate paths
-            for candidate in (
-                Path(".pcb-inspector.yaml"),
-                Path(".pcb-inspector.yml"),
-                Path("pcb-inspector.yaml"),
-                Path("rules.yaml"),
-                Path("rules.yml"),
-            ):
-                if candidate.exists():
-                    config_path = candidate
-                    break
+    def load(
+        cls,
+        config_path: Path | str | None = None,
+        project_dir: Path | str | None = None,
+    ) -> InspectorConfig:
+        """Load configuration from YAML with per-project override support.
 
-        if config_path is None:
+        Resolution hierarchy:
+        1. Explicitly provided `config_path` via CLI flag (-c / --config)
+        2. Per-project override in `project_dir` (.pcb-inspector.yaml / rules.yaml)
+        3. Global / root directory configuration (rules.yaml / .pcb-inspector.yaml)
+        4. Built-in defaults
+        """
+        if config_path is not None:
+            path = Path(config_path)
+            if path.exists():
+                with open(path, encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                return cls(**data)
             return cls()
 
-        path = Path(config_path)
-        if not path.exists():
-            return cls()
+        candidates: list[Path] = []
+        if project_dir is not None:
+            p_dir = Path(project_dir)
+            for name in (".pcb-inspector.yaml", ".pcb-inspector.yml", "pcb-inspector.yaml", "rules.yaml"):
+                candidates.append(p_dir / name)
 
-        with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
+        for name in (".pcb-inspector.yaml", ".pcb-inspector.yml", "pcb-inspector.yaml", "rules.yaml", "rules.yml"):
+            candidates.append(Path(name))
 
-        return cls(**data)
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file():
+                with open(candidate, encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                return cls(**data)
+
+        return cls()
