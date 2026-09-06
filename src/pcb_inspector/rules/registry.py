@@ -50,11 +50,25 @@ class RuleRegistry:
 
 
 def init_default_registry() -> RuleRegistry:
-    """Initialize standard registry with built-in rules."""
+    """Initialize standard registry with built-in deterministic and heuristic rules."""
+    from pcb_inspector.rules.decoupling import DecouplingProximityRule
+    from pcb_inspector.rules.differential_pairs import DifferentialPairSkewRule
     from pcb_inspector.rules.kicad_drc_erc import KiCadDrcErcRule
+    from pcb_inspector.rules.return_paths import GroundPlaneIntegrityRule
+    from pcb_inspector.rules.switching_loops import SwitchingLoopGeometryRule
+    from pcb_inspector.rules.trace_width import PowerTraceWidthRule
 
     reg = RuleRegistry()
+    # Layer 1: KiCad Native DRC & ERC
     reg.register(KiCadDrcErcRule())
+
+    # Layer 2: Programmatic Engineering Heuristics
+    reg.register(DecouplingProximityRule())
+    reg.register(PowerTraceWidthRule())
+    reg.register(DifferentialPairSkewRule())
+    reg.register(SwitchingLoopGeometryRule())
+    reg.register(GroundPlaneIntegrityRule())
+
     return reg
 
 

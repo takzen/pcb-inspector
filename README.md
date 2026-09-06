@@ -217,7 +217,7 @@ When launched with `pcb-inspector mcp`, the server provides:
 
 - [x] Three-tier verification architecture design & domain data models
 - [x] KiCad 8 / 9 / 10 CLI automation wrappers (`kicad-cli`) & DRC/ERC JSON parsers
-- [ ] Programmatic spatial & physical heuristics (decoupling, DC/DC loops, return paths)
+- [x] Programmatic spatial & physical heuristics (decoupling, DC/DC loops, return paths)
 - [ ] Multimodal vision inspection engine (Gemini Flash 3.8, Fable 5, GPT-6 Astra)
 - [ ] Built-in MCP Server (`pcb-inspector mcp`) for autonomous agent loops
 - [ ] Konnect agentic closed-loop integration & auto-repair workflow
