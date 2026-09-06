@@ -8,6 +8,7 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Status-Under%20Construction%20%F0%9F%9A%A7-orange?style=flat-square" alt="Status: Under Construction"></a>
   <a href="https://kicad.org"><img src="https://img.shields.io/badge/KiCad-8.0%2B%20%7C%209.0%20%7C%2010-314CB6?style=flat-square&logo=kicad&logoColor=white" alt="KiCad Support"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="#-mcp-server--agentic-integration"><img src="https://img.shields.io/badge/MCP%20Server-Supported-5B5EA6?style=flat-square" alt="MCP Server"></a>
@@ -22,6 +23,12 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 ---
 
 </div>
+
+> [!WARNING]
+> ### 🚧 Project Under Active Construction
+> **`pcb-inspector` is currently under heavy foundational development and is NOT ready for production use.**  
+> APIs, CLI interfaces, and inspection heuristics are actively evolving and subject to breaking changes. **Please do not run or rely on this tool on production hardware designs yet.**  
+> Feel free to star or watch the repository to track our progress!
 
 ## 🎯 What is it?
 
