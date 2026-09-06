@@ -43,7 +43,7 @@ class InspectorConfig(BaseModel):
 
     # Vision settings
     vision_model: str = Field(
-        default="gemini-2.5-flash", description="Model identifier for visual inspection"
+        default="gemini-3.8-flash", description="Model identifier for visual inspection"
     )
     vision_api_key_env: str = Field(
         default="GEMINI_API_KEY", description="Environment variable holding the Vision API key"
