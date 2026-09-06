@@ -34,16 +34,7 @@ class RuleRegistry:
     def evaluate_all(
         self, context: Any, config: InspectorConfig, fail_fast: bool = False
     ) -> list[Finding]:
-        """Evaluate all registered rules against the given context.
-
-        Args:
-            context: Parsed PCB or project context.
-            config: Inspection configuration.
-            fail_fast: If True, raise on first error; else log and continue.
-
-        Returns:
-            Aggregated list of all findings.
-        """
+        """Evaluate all registered rules against the given context."""
         all_findings: list[Finding] = []
 
         for rule_id, rule in self._rules.items():
@@ -58,5 +49,14 @@ class RuleRegistry:
         return all_findings
 
 
+def init_default_registry() -> RuleRegistry:
+    """Initialize standard registry with built-in rules."""
+    from pcb_inspector.rules.kicad_drc_erc import KiCadDrcErcRule
+
+    reg = RuleRegistry()
+    reg.register(KiCadDrcErcRule())
+    return reg
+
+
 # Global default registry instance
-default_registry = RuleRegistry()
+default_registry = init_default_registry()
