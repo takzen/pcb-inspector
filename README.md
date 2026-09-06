@@ -10,27 +10,24 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Status-Under%20Construction%20%F0%9F%9A%A7-orange?style=flat-square" alt="Status: Under Construction"></a>
+  <a href="https://github.com/takzen/pcb-inspector/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/Release-v0.1.0-blue?style=flat-square" alt="Release: v0.1.0"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-86%20passed%20%7C%2083%25-brightgreen?style=flat-square" alt="Tests: 86 passed"></a>
   <a href="https://kicad.org"><img src="https://img.shields.io/badge/KiCad-8.0%2B%20%7C%209.0%20%7C%2010-314CB6?style=flat-square&logo=kicad&logoColor=white" alt="KiCad Support"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="#-mcp-server--agentic-integration"><img src="https://img.shields.io/badge/MCP%20Server-Supported-5B5EA6?style=flat-square" alt="MCP Server"></a>
   <a href="#-3-multimodal-visual-review"><img src="https://img.shields.io/badge/AI-Multimodal%20Vision-8A2BE2?style=flat-square&logo=openai&logoColor=white" alt="Multimodal AI"></a>
-  <a href="#-mcp-server--agentic-integration"><img src="https://img.shields.io/badge/Integration-Konnect%20%26%20CI-00A67E?style=flat-square" alt="Integration"></a>
-  <a href="#-design-philosophy"><img src="https://img.shields.io/badge/Verification-3--Layer%20Pipeline-orange?style=flat-square" alt="Verification Pipeline"></a>
   <a href="https://github.com/takzen/pcb-inspector/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome"></a>
 </p>
 
-[🎯 What is it?](#-what-is-it) • [📖 User Manual](MANUAL.md) • [🧠 Verification Pipeline](#-multi-layer-verification-pipeline) • [🤖 MCP Server & Agent Loop](#-mcp-server--agentic-integration) • [🏗️ Architecture](#️-design-philosophy) • [🚀 Use Cases](#-use-cases) • [🛠️ Roadmap](#️-planned-integrations) • [📄 License](#-license)
+[🎯 What is it?](#-what-is-it) • [⚡ Quickstart](#-quickstart--installation) • [📖 User Manual](MANUAL.md) • [🧠 Verification Pipeline](#-multi-layer-verification-pipeline) • [🤖 MCP Server & Agent Loop](#-mcp-server--agentic-integration) • [🏗️ Architecture](#️-design-philosophy) • [🚀 Use Cases](#-use-cases) • [🛠️ Roadmap](#️-roadmap--progress) • [📄 License](#-license)
 
 ---
 
 </div>
 
-> [!WARNING]
-> ### 🚧 Project Under Active Construction
-> **`pcb-inspector` is currently under heavy foundational development and is NOT ready for production use.**  
-> APIs, CLI interfaces, and inspection heuristics are actively evolving and subject to breaking changes. **Please do not run or rely on this tool on production hardware designs yet.**  
-> Feel free to star or watch the repository to track our progress!
+> [!NOTE]
+> **`pcb-inspector` v0.1.0 is now live!**  
+> The 3-layer verification engine, built-in MCP server, interactive HTML reporting, and GitHub Action are fully functional. Check out the [📖 User Manual & Configuration Guide (MANUAL.md)](MANUAL.md) for practical examples, rule catalog, and per-project override guides.
 
 ## 🎯 What is it?
 
@@ -43,6 +40,42 @@ It can run standalone as a **CLI or GitHub Action** on manually designed boards,
 > [!TIP]
 > **Don't just generate a PCB. Independently inspect it before you manufacture it.**  
 > *Design. Inspect. Fix. Verify.*
+
+---
+
+## ⚡ Quickstart & Installation
+
+### Installation
+
+```bash
+# Using uv (recommended)
+uv pip install pcb-inspector
+
+# Or install from source
+uv pip install "git+https://github.com/takzen/pcb-inspector.git"
+```
+
+### Essential CLI Commands
+
+```bash
+# 1. Full 3-layer audit (DRC + Heuristics + Vision) with interactive HTML report
+pcb-inspector check path/to/board.kicad_pcb -o report.html -f html
+
+# 2. Fast deterministic DRC/ERC only (native KiCad)
+pcb-inspector drc path/to/board.kicad_pcb
+
+# 3. Spatial & physical engineering heuristics only
+pcb-inspector analyze path/to/board.kicad_pcb
+
+# 4. Dedicated Multimodal AI Vision Review (Gemini Flash 3.8, Fable 5, GPT-6 Astra)
+pcb-inspector vision path/to/board.kicad_pcb --model gemini-3.8-flash
+
+# 5. Continuous Watch Mode (automatically re-checks on board save)
+pcb-inspector check path/to/board.kicad_pcb --watch
+
+# 6. Launch Model Context Protocol (MCP) server for AI agents
+pcb-inspector mcp --transport stdio
+```
 
 ---
 
@@ -215,18 +248,26 @@ When launched with `pcb-inspector mcp`, the server provides:
 
 ---
 
-## 🛠️ Planned Integrations & Roadmap
+## 🛠️ Roadmap & Progress
 
+### v0.1.0 (Released)
 - [x] Three-tier verification architecture design & domain data models
 - [x] KiCad 8 / 9 / 10 CLI automation wrappers (`kicad-cli`) & DRC/ERC JSON parsers
-- [x] Programmatic spatial & physical heuristics (decoupling, DC/DC loops, return paths)
-- [ ] Multimodal vision inspection engine (Gemini Flash 3.8, Fable 5, GPT-6 Astra)
-- [ ] Built-in MCP Server (`pcb-inspector mcp`) for autonomous agent loops
-- [ ] Konnect agentic closed-loop integration & auto-repair workflow
-- [ ] Automated 2D SVG & 3D raytraced board rendering
-- [ ] Gerber & drill file inspection
-- [ ] GitHub Action (`pcb-inspector-action`)
-- [ ] Interactive HTML / Markdown visual report viewer
+- [x] Programmatic spatial & physical heuristics (decoupling, DC/DC loops, return paths, diff pairs, power traces)
+- [x] Multimodal vision inspection engine (Gemini Flash 3.8, Fable 5, GPT-6 Astra)
+- [x] Automated 2D SVG board renderer with top/bottom mirrored views & programmatic fallback
+- [x] Built-in Model Context Protocol (MCP) Server (`pcb-inspector mcp`) for autonomous agent loops
+- [x] Konnect agentic closed-loop integration & `ActionableFix` auto-repair coordinates
+- [x] Continuous watch mode (`--watch`) for real-time iterative layout reviews
+- [x] Multi-format reporting: Interactive HTML5 (zero CDN), Markdown, JSON, and Terminal Rich
+- [x] Reusable GitHub Action (`.github/actions/pcb-inspector`) for CI/CD pipelines
+- [x] Golden Sample reference benchmark boards (`clean_board` & `flawed_board`)
+
+### Future Enhancements (v0.2.0+)
+- [ ] 3D raytraced photo-realistic board rendering via Blender / KiCad raytracer
+- [ ] Direct Gerber (RS-274X) & Excellon drill file fabrication inspection
+- [ ] Automated IPC-2221 conductor spacing & current-carrying capacity calculator
+- [ ] Differential TDR waveform simulation for transmission lines
 
 ---
 
