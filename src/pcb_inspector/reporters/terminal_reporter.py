@@ -37,7 +37,7 @@ class TerminalReporter:
             f"pcb-inspector v{result.tool_version} | Status: [{status_color}]{status_text}[/{status_color}]\n"
             f"Execution time: [yellow]{s.duration_seconds:.2f}s[/yellow]"
         )
-        self.console.print(Panel(panel_content, title="🔬 PCB Inspector Audit Report", expand=False))
+        self.console.print(Panel(panel_content, title="⌖ PCB Inspector Audit Report", expand=False))
 
         # Metrics Table
         summary_table = Table(title="Summary Metrics", header_style="bold magenta")

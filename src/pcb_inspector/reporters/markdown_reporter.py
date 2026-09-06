@@ -14,7 +14,7 @@ class MarkdownReporter(BaseReporter):
         status_text = "🟢 **PASSED**" if s.passed else "🔴 **FAILED**"
 
         lines: list[str] = [
-            f"# 🔬 PCB Inspection Report — {status_text}",
+            f"# ⌖ PCB Inspection Report — {status_text}",
             "",
             f"- **Project:** `{result.project_path}`",
             f"- **Generated:** `{result.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}`",

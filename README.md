@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🔬⚡ pcb-inspector
+<img src="assets/icon.svg" width="90" height="90" alt="pcb-inspector icon" />
+
+# pcb-inspector
 
 ### *Automated Multimodal Design Reviewer & Linter for KiCad Projects*
 

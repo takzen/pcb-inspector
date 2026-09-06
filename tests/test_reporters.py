@@ -30,7 +30,7 @@ def test_markdown_reporter(sample_audit_result: AuditResult, tmp_path: Path) -> 
     reporter = MarkdownReporter()
     output_str = reporter.render(sample_audit_result)
 
-    assert "# 🔬 PCB Inspection Report" in output_str
+    assert "PCB Inspection Report" in output_str
     assert "DRC-001-SHORT-U1-GND" in output_str
     assert "DEC-002-U1-C3" in output_str
     assert "Engineering Rationale" in output_str

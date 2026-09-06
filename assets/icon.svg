@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="100%" height="100%">
+  <defs>
+    <!-- Cyan Glow -->
+    <linearGradient id="icCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+
+    <!-- Gold / Copper ENIG -->
+    <linearGradient id="icGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE047"/>
+      <stop offset="50%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+
+    <!-- Scan Beam -->
+    <linearGradient id="icBeam" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.8"/>
+      <stop offset="40%" stop-color="#00F0FF" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0.0"/>
+    </linearGradient>
+
+    <!-- Chip Core -->
+    <linearGradient id="icChip" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="100%" stop-color="#0A0F1D"/>
+    </linearGradient>
+
+    <!-- Soft Glow Filter -->
+    <filter id="icGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Outer Octagonal Ring -->
+  <polygon points="90,10 145,35 170,90 145,145 90,170 35,145 10,90 35,35" fill="#0A0F1D" stroke="#334155" stroke-width="2.5"/>
+  <polygon points="90,16 141,39 164,90 141,141 90,164 39,141 16,90 39,39" fill="#070B14" stroke="#1E293B" stroke-width="1.5"/>
+
+  <!-- Radar / Inspection Range Circle -->
+  <circle cx="90" cy="90" r="56" fill="none" stroke="#1E293B" stroke-width="1.5" stroke-dasharray="4,4"/>
+  <circle cx="90" cy="90" r="46" fill="none" stroke="url(#icCyan)" stroke-width="1.5" stroke-opacity="0.4"/>
+
+  <!-- Converging PCB Traces -->
+  <path d="M 24,65 L 45,65 L 60,76" fill="none" stroke="#1E3A8A" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="24" cy="65" r="2.5" fill="#334155"/>
+
+  <path d="M 24,115 L 45,115 L 60,104" fill="none" stroke="url(#icCyan)" stroke-width="2.5" stroke-linecap="round" filter="url(#icGlow)"/>
+  <circle cx="24" cy="115" r="2.5" fill="#00F0FF"/>
+
+  <path d="M 156,65 L 135,65 L 120,76" fill="none" stroke="url(#icGold)" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="156" cy="65" r="2.5" fill="#F59E0B"/>
+
+  <path d="M 156,115 L 135,115 L 120,104" fill="none" stroke="#1E3A8A" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="156" cy="115" r="2.5" fill="#334155"/>
+
+  <!-- Scanning Laser Cone & Line -->
+  <path d="M 90,90 L 62,48 A 52 52 0 0 1 118,48 Z" fill="url(#icBeam)"/>
+  <line x1="90" y1="90" x2="90" y2="38" stroke="#00F0FF" stroke-width="2" filter="url(#icGlow)"/>
+
+  <!-- Silicon QFN Package -->
+  <rect x="66" y="66" width="48" height="48" rx="6" fill="url(#icChip)" stroke="#38BDF8" stroke-width="1.8"/>
+  
+  <!-- Silicon Die Core -->
+  <rect x="77" y="77" width="26" height="26" rx="3" fill="#030712" stroke="#F59E0B" stroke-width="1.2"/>
+  
+  <!-- Pin 1 Marker -->
+  <polygon points="70,70 78,70 70,78" fill="#00F0FF"/>
+
+  <!-- QFN Gold Pins -->
+  <!-- Top & Bottom -->
+  <rect x="73" y="63" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="83" y="63" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="93" y="63" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="103" y="63" width="4" height="4" rx="1" fill="url(#icGold)"/>
+
+  <rect x="73" y="113" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="83" y="113" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="93" y="113" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="103" y="113" width="4" height="4" rx="1" fill="url(#icGold)"/>
+
+  <!-- Left & Right -->
+  <rect x="63" y="73" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="63" y="83" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="63" y="93" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="63" y="103" width="4" height="4" rx="1" fill="url(#icGold)"/>
+
+  <rect x="113" y="73" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="113" y="83" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="113" y="93" width="4" height="4" rx="1" fill="url(#icGold)"/>
+  <rect x="113" y="103" width="4" height="4" rx="1" fill="url(#icGold)"/>
+
+  <!-- Reticle Crosshair Alignment Lines -->
+  <line x1="28" y1="90" x2="55" y2="90" stroke="#00F0FF" stroke-width="1.5" opacity="0.85"/>
+  <line x1="125" y1="90" x2="152" y2="90" stroke="#00F0FF" stroke-width="1.5" opacity="0.85"/>
+  <line x1="90" y1="28" x2="90" y2="55" stroke="#00F0FF" stroke-width="1.5" opacity="0.85"/>
+  <line x1="90" y1="125" x2="90" y2="152" stroke="#00F0FF" stroke-width="1.5" opacity="0.85"/>
+
+  <!-- Precision Corner Brackets -->
+  <path d="M 58,66 L 58,58 L 66,58" fill="none" stroke="#00F0FF" stroke-width="2" filter="url(#icGlow)"/>
+  <path d="M 122,66 L 122,58 L 114,58" fill="none" stroke="#00F0FF" stroke-width="2" filter="url(#icGlow)"/>
+  <path d="M 58,114 L 58,122 L 66,122" fill="none" stroke="#00F0FF" stroke-width="2" filter="url(#icGlow)"/>
+  <path d="M 122,114 L 122,122 L 114,122" fill="none" stroke="#00F0FF" stroke-width="2" filter="url(#icGlow)"/>
+
+  <!-- Inspection Target Center Node -->
+  <circle cx="90" cy="90" r="3.5" fill="#00F0FF" filter="url(#icGlow)"/>
+</svg>
