@@ -29,6 +29,7 @@ class MarkdownReporter(BaseReporter):
             f"| 🟠 Warning | {s.warning_count} |",
             f"| 🟡 Suggestion | {s.suggestion_count} |",
             f"| 🟢 Pass Checks | {s.pass_count} |",
+            f"| 🛡️ Health Score | **{s.health_score:.0f}/100** |",
             f"| **Total Findings** | **{s.total_findings}** |",
             "",
         ]
@@ -58,6 +59,7 @@ class MarkdownReporter(BaseReporter):
                 components_str = ", ".join(f"`{c}`" for c in item.components) or "N/A"
                 nets_str = ", ".join(f"`{n}`" for n in item.nets) or "N/A"
                 coords_str = ", ".join(str(c) for c in item.coordinates) or "N/A"
+                corr_str = ", ".join(f"`{c}`" for c in item.correlated_with) or "None"
 
                 lines.extend(
                     [
@@ -67,6 +69,7 @@ class MarkdownReporter(BaseReporter):
                         f"- **Components:** {components_str}",
                         f"- **Nets:** {nets_str}",
                         f"- **Coordinates:** {coords_str}",
+                        f"- **Correlated Issues:** {corr_str}",
                         "",
                         "**Description:**  ",
                         f"{item.description}",
@@ -83,7 +86,16 @@ class MarkdownReporter(BaseReporter):
                         ]
                     )
 
-                if item.recommendation:
+                if item.actionable_fix:
+                    af = item.actionable_fix
+                    lines.extend(
+                        [
+                            "> [!TIP]",
+                            f"> **⚡ Actionable Fix (`{af.action_type}`):** {af.description}",
+                            "",
+                        ]
+                    )
+                elif item.recommendation:
                     lines.extend(
                         [
                             "> [!TIP]",

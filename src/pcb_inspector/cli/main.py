@@ -26,9 +26,11 @@ from rich.console import Console
 from rich.table import Table
 
 from pcb_inspector import __version__
+from pcb_inspector.core.aggregator import FindingAggregator
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import AuditResult, Severity
 from pcb_inspector.kicad.cli_wrapper import KiCadCli
+from pcb_inspector.reporters.html_reporter import HtmlReporter
 from pcb_inspector.reporters.json_reporter import JsonReporter
 from pcb_inspector.reporters.markdown_reporter import MarkdownReporter
 from pcb_inspector.reporters.terminal_reporter import TerminalReporter
@@ -133,7 +135,8 @@ def check(
     console.print(f"[bold]Starting inspection of:[/bold] [cyan]{project_path}[/cyan]")
 
     # Run evaluations via registry
-    findings = default_registry.evaluate_all(context=project_path, config=cfg)
+    raw_findings = default_registry.evaluate_all(context=project_path, config=cfg)
+    findings = FindingAggregator().aggregate(raw_findings)
 
     duration = time.perf_counter() - start_time
     result = AuditResult.create(
@@ -151,15 +154,20 @@ def check(
     # Save reports if requested
     if output:
         fmt = report_format.lower()
-        if fmt in ("json", "both"):
+        if fmt in ("json", "both", "all"):
             json_path = output if fmt == "json" else output.with_suffix(".json")
             JsonReporter().write_to_file(result, json_path)
             console.print(f"Saved JSON report to: [green]{json_path}[/green]")
 
-        if fmt in ("markdown", "md", "both"):
+        if fmt in ("markdown", "md", "both", "all"):
             md_path = output if fmt in ("markdown", "md") else output.with_suffix(".md")
             MarkdownReporter().write_to_file(result, md_path)
             console.print(f"Saved Markdown report to: [green]{md_path}[/green]")
+
+        if fmt in ("html", "all"):
+            html_path = output if fmt == "html" else output.with_suffix(".html")
+            HtmlReporter().write_to_file(result, html_path)
+            console.print(f"Saved HTML report to: [green]{html_path}[/green]")
 
     # Exit code based on pass/fail
     if not result.summary.passed:
@@ -205,7 +213,8 @@ def vision(
     from pcb_inspector.rules.vision_review import VisionReviewRule
 
     rule = VisionReviewRule()
-    findings = rule.evaluate(context=project_path, config=cfg)
+    raw_findings = rule.evaluate(context=project_path, config=cfg)
+    findings = FindingAggregator().aggregate(raw_findings)
 
     duration = time.perf_counter() - start_time
     result = AuditResult.create(
@@ -221,15 +230,20 @@ def vision(
 
     if output:
         fmt = report_format.lower()
-        if fmt in ("json", "both"):
+        if fmt in ("json", "both", "all"):
             json_path = output if fmt == "json" else output.with_suffix(".json")
             JsonReporter().write_to_file(result, json_path)
             console.print(f"Saved JSON report to: [green]{json_path}[/green]")
 
-        if fmt in ("markdown", "md", "both"):
+        if fmt in ("markdown", "md", "both", "all"):
             md_path = output if fmt in ("markdown", "md") else output.with_suffix(".md")
             MarkdownReporter().write_to_file(result, md_path)
             console.print(f"Saved Markdown report to: [green]{md_path}[/green]")
+
+        if fmt in ("html", "all"):
+            html_path = output if fmt == "html" else output.with_suffix(".html")
+            HtmlReporter().write_to_file(result, html_path)
+            console.print(f"Saved HTML report to: [green]{html_path}[/green]")
 
     if not result.summary.passed:
         raise typer.Exit(code=1)

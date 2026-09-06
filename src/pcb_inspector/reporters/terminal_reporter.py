@@ -28,13 +28,20 @@ class TerminalReporter:
 
     def print_result(self, result: AuditResult) -> None:
         s = result.summary
+        # Health score styling
+        if s.health_score >= 90:
+            score_color = "bold green"
+        elif s.health_score >= 70:
+            score_color = "bold yellow"
+        else:
+            score_color = "bold red"
 
         # Banner
         status_color = "bold green" if s.passed else "bold red"
         status_text = "PASSED" if s.passed else "FAILED"
         panel_content = (
             f"Project: [cyan]{result.project_path}[/cyan]\n"
-            f"pcb-inspector v{result.tool_version} | Status: [{status_color}]{status_text}[/{status_color}]\n"
+            f"pcb-inspector v{result.tool_version} | Status: [{status_color}]{status_text}[/{status_color}] | Health Score: [{score_color}]{s.health_score:.0f}/100[/{score_color}]\n"
             f"Execution time: [yellow]{s.duration_seconds:.2f}s[/yellow]"
         )
         self.console.print(Panel(panel_content, title="⌖ PCB Inspector Audit Report", expand=False))
@@ -48,6 +55,7 @@ class TerminalReporter:
         summary_table.add_row(f"{Severity.WARNING.badge_emoji} Warning", str(s.warning_count))
         summary_table.add_row(f"{Severity.SUGGESTION.badge_emoji} Suggestion", str(s.suggestion_count))
         summary_table.add_row(f"{Severity.PASS.badge_emoji} Pass", str(s.pass_count))
+        summary_table.add_row("🛡️ Health Score", f"[{score_color}]{s.health_score:.0f}/100[/{score_color}]")
         summary_table.add_row("Total Findings", f"[bold]{s.total_findings}[/bold]")
         self.console.print(summary_table)
 

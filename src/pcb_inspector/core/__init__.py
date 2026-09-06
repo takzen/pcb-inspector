@@ -10,6 +10,7 @@ from pcb_inspector.core.exceptions import (
     VisionReviewError,
 )
 from pcb_inspector.core.models import (
+    ActionableFix,
     AuditResult,
     AuditSummary,
     Coordinate,
@@ -19,6 +20,7 @@ from pcb_inspector.core.models import (
 )
 
 __all__ = [
+    "ActionableFix",
     "AuditResult",
     "AuditSummary",
     "Coordinate",

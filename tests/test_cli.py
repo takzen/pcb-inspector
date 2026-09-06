@@ -41,3 +41,15 @@ def test_cli_check_with_empty_project(tmp_path: Path) -> None:
     assert result.exit_code in (0, 1)
     assert out_md.exists()
     assert "PCB Inspection Report" in out_md.read_text(encoding="utf-8")
+
+
+def test_cli_check_html_format(tmp_path: Path) -> None:
+    dummy_pcb = tmp_path / "test.kicad_pcb"
+    dummy_pcb.write_text('(kicad_pcb (version 20240108))', encoding="utf-8")
+
+    out_html = tmp_path / "out.html"
+    result = runner.invoke(app, ["check", str(dummy_pcb), "-o", str(out_html), "-f", "html"])
+    assert result.exit_code in (0, 1)
+    assert out_html.exists()
+    assert "<!DOCTYPE html>" in out_html.read_text(encoding="utf-8")
+

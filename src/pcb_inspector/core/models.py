@@ -59,6 +59,24 @@ class Coordinate(BaseModel):
         return f"({self.x:.2f}, {self.y:.2f} mm){layer_str}"
 
 
+class ActionableFix(BaseModel):
+    """Machine-readable actionable fix specification for automated agent self-correction loops."""
+
+    action_type: str = Field(
+        ...,
+        description="Type of repair action: RELOCATE_COMPONENT, WIDEN_TRACE, REROUTE_NET, ADD_PIN1_MARKER, ADJUST_CLEARANCE",
+    )
+    component: str | None = Field(default=None, description="Target component designator")
+    net: str | None = Field(default=None, description="Target net name")
+    target_coordinates: Coordinate | None = Field(
+        default=None, description="Recommended relocation coordinates"
+    )
+    parameters: dict[str, Any] = Field(
+        default_factory=dict, description="Numerical/contextual parameters (e.g. recommended_width_mm)"
+    )
+    description: str = Field(..., description="Human and agent-readable repair instruction")
+
+
 class Finding(BaseModel):
     """Structured inspection finding produced by any verification layer."""
 
@@ -86,6 +104,12 @@ class Finding(BaseModel):
     visual_snapshot: str | None = Field(
         default=None, description="Relative path or URI to an image snapshot highlighting the issue"
     )
+    correlated_with: list[str] = Field(
+        default_factory=list, description="IDs of correlated findings across layers"
+    )
+    actionable_fix: ActionableFix | None = Field(
+        default=None, description="Machine-readable fix instruction for agents"
+    )
     raw_data: dict[str, Any] = Field(
         default_factory=dict, description="Arbitrary raw context data from parser or DRC"
     )
@@ -99,6 +123,7 @@ class AuditSummary(BaseModel):
     warning_count: int = 0
     suggestion_count: int = 0
     pass_count: int = 0
+    health_score: float = 100.0
     passed: bool = True
     duration_seconds: float = 0.0
 
@@ -121,12 +146,17 @@ class AuditSummary(BaseModel):
         else:
             passed = crit == 0 and warn == 0 and sugg == 0
 
+        # Layout Health Score: 0 to 100
+        penalty = (crit * 30.0) + (warn * 10.0) + (sugg * 2.0)
+        score = max(0.0, round(100.0 - penalty, 1))
+
         return cls(
             total_findings=len(findings),
             critical_count=crit,
             warning_count=warn,
             suggestion_count=sugg,
             pass_count=passed_cnt,
+            health_score=score,
             passed=passed,
             duration_seconds=round(duration_seconds, 3),
         )
@@ -167,3 +197,8 @@ class AuditResult(BaseModel):
             findings=findings,
             metadata=metadata or {},
         )
+
+    @property
+    def actionable_fixes(self) -> list[ActionableFix]:
+        """Return list of non-null actionable fixes for automated repair agents."""
+        return [f.actionable_fix for f in self.findings if f.actionable_fix is not None]
