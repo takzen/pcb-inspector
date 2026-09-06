@@ -1,0 +1,94 @@
+name: "PCB Inspector Review"
+description: "Automated 3-layer design review and linter for KiCad projects (DRC, heuristics, vision AI)"
+author: "Krzysztof Pika"
+inputs:
+  project_path:
+    description: "Path to KiCad project file (.kicad_pro), layout (.kicad_pcb), or directory"
+    required: true
+    default: "."
+  fail_on:
+    description: "Severity threshold that fails the step: CRITICAL, WARNING, or SUGGESTION"
+    required: false
+    default: "CRITICAL"
+  enable_vision:
+    description: "Enable Layer 3 multimodal vision AI inspection"
+    required: false
+    default: "false"
+  vision_model:
+    description: "Vision AI model to use (gemini-3.8-flash, fable-5, gpt-6-astra, mock)"
+    required: false
+    default: "gemini-3.8-flash"
+  config_file:
+    description: "Optional custom .pcb-inspector.yaml configuration file"
+    required: false
+    default: ""
+  output_dir:
+    description: "Directory to write generated reports (markdown, json, html)"
+    required: false
+    default: "reports"
+outputs:
+  passed:
+    description: "Whether the PCB inspection passed without violating fail_on threshold"
+    value: ${{ steps.inspector.outputs.passed }}
+  markdown_report:
+    description: "Path to generated markdown report"
+    value: "${{ inputs.output_dir }}/pcb_report.md"
+  json_report:
+    description: "Path to generated json report"
+    value: "${{ inputs.output_dir }}/pcb_report.json"
+  html_report:
+    description: "Path to generated interactive HTML report"
+    value: "${{ inputs.output_dir }}/pcb_report.html"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
+    - name: Install pcb-inspector
+      shell: bash
+      run: |
+        uv pip install --system .
+
+    - name: Run pcb-inspector check
+      id: inspector
+      shell: bash
+      run: |
+        mkdir -p "${{ inputs.output_dir }}"
+        
+        VISION_FLAG="--no-vision"
+        if [ "${{ inputs.enable_vision }}" = "true" ]; then
+          VISION_FLAG="--vision --vision-model ${{ inputs.vision_model }}"
+        fi
+
+        CONFIG_ARG=""
+        if [ -n "${{ inputs.config_file }}" ]; then
+          CONFIG_ARG="--config ${{ inputs.config_file }}"
+        fi
+
+        set +e
+        pcb-inspector check "${{ inputs.project_path }}" \
+          --output "${{ inputs.output_dir }}/pcb_report" \
+          --format all \
+          --fail-on "${{ inputs.fail_on }}" \
+          $VISION_FLAG \
+          $CONFIG_ARG
+        EXIT_CODE=$?
+        set -e
+
+        if [ -f "${{ inputs.output_dir }}/pcb_report.md" ]; then
+          cat "${{ inputs.output_dir }}/pcb_report.md" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        if [ $EXIT_CODE -eq 0 ]; then
+          echo "passed=true" >> $GITHUB_OUTPUT
+        else
+          echo "passed=false" >> $GITHUB_OUTPUT
+          exit $EXIT_CODE
+        fi

@@ -199,6 +199,11 @@ class AuditResult(BaseModel):
         )
 
     @property
+    def health_score(self) -> float:
+        """Layout health score (0-100) from summary."""
+        return self.summary.health_score
+
+    @property
     def actionable_fixes(self) -> list[ActionableFix]:
         """Return list of non-null actionable fixes for automated repair agents."""
         return [f.actionable_fix for f in self.findings if f.actionable_fix is not None]

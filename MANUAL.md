@@ -59,16 +59,30 @@ Displays the installed version of `pcb-inspector` and the detected `kicad-cli` p
 Prints a formatted table of all currently registered rules, their unique Rule ID, category, and default severity.
 
 ### `pcb-inspector check [OPTIONS] PROJECT_PATH`
+Runs a full 3-layer verification audit on a KiCad project.
 
 | Option | Flag | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `PROJECT_PATH` | *(Argument)* | *(Required)* | Path to `.kicad_pro`, `.kicad_pcb`, `.kicad_sch`, or project directory. |
 | `--output` | `-o` | `None` | Path where the audit report will be written. |
-| `--format` | `-f` | `markdown` | Output report format: `markdown`, `json`, or `both`. |
+| `--format` | `-f` | `markdown` | Output report format: `markdown`, `json`, `html`, or `all`. |
 | `--fail-on` | N/A | `CRITICAL` | Severity threshold triggering exit code `1`: `CRITICAL`, `WARNING`, `SUGGESTION`. |
 | `--config` | `-c` | `None` | Explicit path to a custom YAML configuration file. |
 | `--vision` | N/A | `false` | Enable Layer 3 Multimodal Vision AI review. |
 | `--vision-model` | N/A | `gemini-3.8-flash` | Model identifier: `gemini-3.8-flash`, `fable-5`, `gpt-6-astra`, `mock`. |
+| `--watch` | `-w` | `false` | Continuously monitor layout files and re-run check on save. |
+
+### `pcb-inspector drc [OPTIONS] PROJECT_PATH`
+Runs Layer 1 deterministic DRC/ERC verification only using native `kicad-cli`:
+```bash
+pcb-inspector drc hardware/board.kicad_pcb -f markdown -o drc-report.md
+```
+
+### `pcb-inspector analyze [OPTIONS] PROJECT_PATH`
+Runs Layer 2 spatial, geometric, and physical heuristics only (decoupling, return paths, differential pair skew, switching loops, power trace widths):
+```bash
+pcb-inspector analyze hardware/board.kicad_pcb -f html -o heuristics.html
+```
 
 ### `pcb-inspector vision [OPTIONS] PROJECT_PATH`
 Executes dedicated Layer 3 Multimodal Visual Review directly on a PCB layout:
@@ -84,9 +98,16 @@ pcb-inspector vision path/to/board.kicad_pcb --model gpt-6-astra -o visual-repor
 | :--- | :--- | :--- | :--- |
 | `PROJECT_PATH` | *(Argument)* | *(Required)* | Path to KiCad PCB layout (`.kicad_pcb`). |
 | `--output` | `-o` | `None` | File path to save generated report. |
-| `--format` | `-f` | `markdown` | Format: `markdown`, `json`, or `both`. |
+| `--format` | `-f` | `markdown` | Format: `markdown`, `json`, `html`, or `all`. |
 | `--model` | `-m` | `gemini-3.8-flash` | Vision model: `gemini-3.8-flash`, `fable-5`, `gpt-6-astra`, `mock`. |
 | `--config` | `-c` | `None` | Custom YAML configuration file. |
+| `--watch` | `-w` | `false` | Continuously monitor layout files and re-run on change. |
+
+### `pcb-inspector mcp [OPTIONS]`
+Starts the built-in Model Context Protocol (MCP) server over `stdio` (or `sse`):
+```bash
+pcb-inspector mcp --transport stdio
+```
 
 ---
 
@@ -253,4 +274,53 @@ jobs:
           path: |
             audit-report.md
             audit-report.json
+
+---
+
+## 7. Model Context Protocol (MCP) Server for AI Agents
+
+`pcb-inspector` includes a built-in Model Context Protocol server compliant with MCP v1 and v2 specifications. It allows autonomous agents (Claude Code, Cursor, Antigravity, Konnect) to audit designs and perform closed-loop repairs.
+
+### Starting the Server
+
+```bash
+# Start MCP server over standard input/output (standard agent configuration)
+pcb-inspector mcp --transport stdio
 ```
+
+### Adding to Agent Configuration (`mcpServers`)
+
+Add to your `claude_desktop_config.json`, `.cursor/mcp.json`, or Antigravity config:
+
+```json
+{
+  "mcpServers": {
+    "pcb-inspector": {
+      "command": "uv",
+      "args": ["run", "pcb-inspector", "mcp"]
+    }
+  }
+}
+```
+
+### Available MCP Tools
+
+| Tool | Parameters | Description |
+| :--- | :--- | :--- |
+| `inspect_project` | `project_path`, `fail_on`, `enable_vision`, `vision_model`, `config_path` | Comprehensive 3-layer audit. Returns health score, summary, and findings. |
+| `check_decoupling` | `pcb_path`, `max_distance_mm`, `config_path` | Rapid spatial verification of bypass capacitor placement near IC power pins. |
+| `run_drc` | `pcb_path`, `config_path` | Native KiCad DRC/ERC check with parsed violations and coordinates. |
+| `get_actionable_fixes` | `project_path`, `enable_vision`, `vision_model`, `config_path` | Priority array of machine-executable `ActionableFix` items with coordinates $(X, Y)$ and layers. |
+
+### Available MCP Resources
+
+- `rules://list`: JSON array of all registered rules, rule IDs, descriptions, and default severities.
+- `rules://categories`: Available finding categories (`DRC_ERC`, `DECOUPLING`, `POWER_DELIVERY`, etc.).
+- `schema://actionable_fix`: JSON schema specification for automated repair instructions.
+
+### Autonomous Closed-Loop Self-Repair Pattern
+
+When paired with a layout modification agent or tool (such as `Konnect MCP`):
+1. **Agent queries fixes:** calls `get_actionable_fixes(project_path="hardware/board.kicad_pcb")`.
+2. **Agent applies edits:** moves capacitors to `suggested_coordinates` or widens tracks to `parameters.recommended_width_mm`.
+3. **Agent verifies convergence:** calls `inspect_project(...)` until `health_score` reaches 100.0% and `passed` is `true`.

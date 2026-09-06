@@ -7,7 +7,7 @@ from typing import Any
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.exceptions import RuleExecutionError
-from pcb_inspector.core.models import Finding
+from pcb_inspector.core.models import Finding, FindingCategory
 from pcb_inspector.rules.base import BaseRule
 
 logger = logging.getLogger(__name__)
@@ -31,13 +31,37 @@ class RuleRegistry:
         """Return all registered rules."""
         return list(self._rules.values())
 
+    def get_rules_by_category(
+        self, categories: list[FindingCategory] | set[FindingCategory]
+    ) -> list[BaseRule]:
+        """Return registered rules matching any of the specified categories."""
+        cat_set = set(categories)
+        return [r for r in self._rules.values() if r.category in cat_set]
+
     def evaluate_all(
         self, context: Any, config: InspectorConfig, fail_fast: bool = False
     ) -> list[Finding]:
         """Evaluate all registered rules against the given context."""
+        return self.evaluate_filtered(context=context, config=config, fail_fast=fail_fast)
+
+    def evaluate_filtered(
+        self,
+        context: Any,
+        config: InspectorConfig,
+        categories: list[FindingCategory] | set[FindingCategory] | None = None,
+        rule_ids: list[str] | set[str] | None = None,
+        fail_fast: bool = False,
+    ) -> list[Finding]:
+        """Evaluate only rules matching specified categories or IDs."""
         all_findings: list[Finding] = []
+        target_cats = set(categories) if categories is not None else None
+        target_ids = set(rule_ids) if rule_ids is not None else None
 
         for rule_id, rule in self._rules.items():
+            if target_cats is not None and rule.category not in target_cats:
+                continue
+            if target_ids is not None and rule_id not in target_ids:
+                continue
             try:
                 findings = rule.evaluate(context, config)
                 all_findings.extend(findings)

@@ -1,0 +1,41 @@
+name: "KiCad Design Review (PCB Inspector)"
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "**/*.kicad_pcb"
+      - "**/*.kicad_sch"
+      - "**/*.kicad_pro"
+      - ".pcb-inspector.yaml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "**/*.kicad_pcb"
+      - "**/*.kicad_sch"
+      - "**/*.kicad_pro"
+      - ".pcb-inspector.yaml"
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    name: Run PCB Inspector Linter
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run PCB Inspector
+        uses: ./.github/actions/pcb-inspector
+        with:
+          project_path: "."
+          fail_on: "CRITICAL"
+          output_dir: "build/reports"
+
+      - name: Upload Audit Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcb-inspector-reports
+          path: build/reports/
