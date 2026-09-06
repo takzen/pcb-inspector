@@ -1,0 +1,63 @@
+# ==============================================================================
+# ⌖ pcb-inspector: Configuration & Heuristic Rule Thresholds
+# ==============================================================================
+# This configuration file defines execution toggles and engineering thresholds
+# used by the 3-layer verification engine. You can copy this file to any KiCad
+# project root directory as 'rules.yaml' or '.pcb-inspector.yaml'.
+
+# ------------------------------------------------------------------------------
+# 1. Execution Controls & Tool Paths
+# ------------------------------------------------------------------------------
+# Explicit path to kicad-cli binary (leave null to auto-detect KiCad 8/9/10 in PATH)
+kicad_cli_path: null
+
+# Layer 1: KiCad Native Verification
+enable_drc: true   # Run KiCad native Design Rules Check (clearance, shorts, open circuits)
+enable_erc: true   # Run KiCad native Electrical Rules Check (schematic pins, nets)
+
+# Layer 2: Programmatic Engineering Heuristics
+enable_heuristics: true  # Run spatial, geometric, and physical layout checks
+
+# Layer 3: Multimodal Vision AI
+enable_vision: false     # Run visual inspection with multimodal LLM (requires API key)
+
+# ------------------------------------------------------------------------------
+# 2. Heuristic Rules & Physical Thresholds
+# ------------------------------------------------------------------------------
+# [HEUR-DEC-001] Decoupling Capacitor Proximity
+# Maximum allowed distance (in millimeters) between an IC power supply pin
+# and its closest ceramic bypass/decoupling capacitor.
+# Distances above this value trigger a WARNING; distances > 3.5x trigger CRITICAL.
+max_decoupling_distance_mm: 3.5
+
+# [HEUR-PWR-001] Power Distribution Trace Width
+# Minimum recommended trace width (in millimeters) for high-current and power nets
+# (VCC, VDD, +5V, +3V3, VBAT, etc.) to prevent excessive IR voltage drop and heating.
+min_power_trace_width_mm: 0.30
+
+# [HEUR-DIFF-001] Differential Pair Skew / Length Matching
+# Maximum allowable length mismatch (in millimeters) between positive (+/_P)
+# and negative (-/_N) signals of a differential pair (e.g. USB, Ethernet, CAN).
+max_diff_pair_skew_mm: 0.15
+
+# ------------------------------------------------------------------------------
+# 3. Vision AI Settings (Layer 3)
+# ------------------------------------------------------------------------------
+# Model identifier used for optical inspection and DFM review
+vision_model: "gemini-3.8-flash"
+
+# Environment variable containing the API key for the vision model
+vision_api_key_env: "GEMINI_API_KEY"
+
+# ------------------------------------------------------------------------------
+# 4. CI/CD & Reporting Settings
+# ------------------------------------------------------------------------------
+# Threshold severity causing the CLI process to exit with a failure code (exit 1):
+# Options: CRITICAL, WARNING, SUGGESTION
+fail_on: "CRITICAL"
+
+# Default directory where generated reports are saved
+output_dir: "reports"
+
+# Arbitrary project-specific rule parameters
+custom_rules: {}

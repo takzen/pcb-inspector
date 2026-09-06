@@ -70,6 +70,8 @@ class InspectorConfig(BaseModel):
                 Path(".pcb-inspector.yaml"),
                 Path(".pcb-inspector.yml"),
                 Path("pcb-inspector.yaml"),
+                Path("rules.yaml"),
+                Path("rules.yml"),
             ):
                 if candidate.exists():
                     config_path = candidate
