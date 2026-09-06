@@ -10,13 +10,14 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://kicad.org"><img src="https://img.shields.io/badge/KiCad-8.0%2B%20%7C%209.0%20%7C%2010-314CB6?style=flat-square&logo=kicad&logoColor=white" alt="KiCad Support"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
+  <a href="#-mcp-server--agentic-integration"><img src="https://img.shields.io/badge/MCP%20Server-Supported-5B5EA6?style=flat-square" alt="MCP Server"></a>
   <a href="#-3-multimodal-visual-review"><img src="https://img.shields.io/badge/AI-Multimodal%20Vision-8A2BE2?style=flat-square&logo=openai&logoColor=white" alt="Multimodal AI"></a>
-  <a href="#-closed-loop-agent-integration"><img src="https://img.shields.io/badge/Integration-Konnect%20%26%20CI-00A67E?style=flat-square" alt="Integration"></a>
+  <a href="#-mcp-server--agentic-integration"><img src="https://img.shields.io/badge/Integration-Konnect%20%26%20CI-00A67E?style=flat-square" alt="Integration"></a>
   <a href="#-design-philosophy"><img src="https://img.shields.io/badge/Verification-3--Layer%20Pipeline-orange?style=flat-square" alt="Verification Pipeline"></a>
   <a href="https://github.com/takzen/pcb-inspector/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome"></a>
 </p>
 
-[🎯 What is it?](#-what-is-it) • [🧠 Verification Pipeline](#-multi-layer-verification-pipeline) • [🔄 Agent Integration](#-closed-loop-agent-integration) • [🏗️ Architecture](#️-design-philosophy) • [🚀 Use Cases](#-use-cases) • [🛠️ Roadmap](#️-planned-integrations) • [📄 License](#-license)
+[🎯 What is it?](#-what-is-it) • [🧠 Verification Pipeline](#-multi-layer-verification-pipeline) • [🤖 MCP Server & Agent Loop](#-mcp-server--agentic-integration) • [🏗️ Architecture](#️-design-philosophy) • [🚀 Use Cases](#-use-cases) • [🛠️ Roadmap](#️-planned-integrations) • [📄 License](#-license)
 
 ---
 
@@ -128,34 +129,54 @@ Each finding includes:
 
 ---
 
-## 🔄 Closed-Loop Agent Integration
+## 🤖 MCP Server & Agentic Integration
 
-`pcb-inspector` is designed from the ground up to act as an independent auditor inside agentic hardware development pipelines (such as **Konnect**):
+`pcb-inspector` provides a native **Model Context Protocol (MCP)** server, making it a drop-in verification tool for AI coding and design agents (Claude Desktop, Cursor, Antigravity).
+
+### 🤝 The Dual-MCP Synergy: `Konnect` + `pcb-inspector`
+
+In modern autonomous hardware workflows, agents need both **actuators** (to edit KiCad designs) and **sensors/auditors** (to verify physical correctness):
+
+| Role | MCP Server | Function |
+| :--- | :--- | :--- |
+| **The Hands (Actuator)** | **`Konnect`** *(by mixelpixx)* | Adds components, connects pins, routes traces, modifies footprints in KiCad. |
+| **The Brain & Eyes (Auditor)** | **`pcb-inspector`** *(this project)* | Validates DRC/ERC, decoupling proximity, switching loops, ground cuts, and silkscreen DFM. |
+
+Together, they enable a **closed-loop autonomous self-correction loop**:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Agent as 🤖 AI Design Agent (Konnect)
-    participant Project as 📁 KiCad Project
-    participant Inspector as 🔬 pcb-inspector
+    participant Agent as 🤖 Autonomous Agent (Claude / Cursor)
+    participant Konnect as 🖐️ Konnect MCP (KiCad Actuator)
+    participant Project as 📁 KiCad Project (.kicad_pcb)
+    participant Inspector as 👁️ pcb-inspector MCP (Auditor)
     participant Fab as 🏭 Fabrication (JLCPCB / PCBWay)
 
-    Agent->>Project: Generate or update schematic & PCB layout
-    Project->>Inspector: Trigger audit (CLI / Action)
+    Agent->>Konnect: place_component / route_track
+    Konnect->>Project: Modifies schematic & PCB files
+    Agent->>Inspector: call tool `inspect_project(path)`
     activate Inspector
-    Inspector->>Inspector: Run kicad-cli (ERC / DRC)
-    Inspector->>Inspector: Run Heuristic Analysis
-    Inspector->>Inspector: Render & Vision Review (2D/3D)
-    Inspector-->>Agent: Return structured JSON / Markdown findings
+    Inspector->>Project: Native DRC + Heuristics + Vision Check
+    Inspector-->>Agent: Returns structured JSON findings + coordinates
     deactivate Inspector
 
-    alt Issues Found (Critical / Warning)
-        Agent->>Project: Apply recommended layout fixes
-        Note over Agent,Inspector: Loop repeats until all checks PASS
+    alt Violations Found (e.g. Decoupling too far, DRC clearance)
+        Agent->>Konnect: Move C3 closer (< 3.5mm), reroute track
+        Note over Agent,Inspector: Agent automatically iterates until 🟢 PASS
     else All Checks Pass (🟢 PASS)
-        Agent->>Fab: Export Gerbers & send to fabrication!
+        Agent->>Fab: Export Gerbers & send to production!
     end
 ```
+
+### 🛠️ Exposed MCP Tools
+
+When launched with `pcb-inspector mcp`, the server provides:
+
+- `inspect_project(project_path: str)`: Runs the complete 3-layer audit (DRC, Heuristics, Vision) and returns prioritized findings.
+- `check_decoupling(pcb_path: str, max_distance_mm: float = 3.5)`: Rapid spatial analysis of IC power pins and decoupling bypass capacitors.
+- `run_drc(pcb_path: str)`: Fast deterministic DRC check returning structured clearance and connectivity violations.
+- `get_actionable_fixes(project_path: str)`: Machine-readable $(X, Y)$ coordinate patches and step-by-step remediation commands for agents.
 
 ---
 
@@ -187,15 +208,16 @@ sequenceDiagram
 
 ## 🛠️ Planned Integrations & Roadmap
 
-- [x] Three-tier verification architecture design
-- [ ] KiCad 8 / 9 / 10 CLI automation wrappers (`kicad-cli`)
+- [x] Three-tier verification architecture design & domain data models
+- [x] KiCad 8 / 9 / 10 CLI automation wrappers (`kicad-cli`) & DRC/ERC JSON parsers
+- [ ] Programmatic spatial & physical heuristics (decoupling, DC/DC loops, return paths)
+- [ ] Multimodal vision inspection engine (GPT-4o, Claude 3.5 Sonnet, Gemini 2.5)
+- [ ] Built-in MCP Server (`pcb-inspector mcp`) for autonomous agent loops
+- [ ] Konnect agentic closed-loop integration & auto-repair workflow
 - [ ] Automated 2D SVG & 3D raytraced board rendering
-- [ ] Multimodal vision inspection prompts (GPT-4o, Claude 3.5 Sonnet, Gemini 1.5/2.0 Pro)
-- [ ] Konnect agentic workflow plugin
-- [ ] GitHub Action (`pcb-inspector-action`)
 - [ ] Gerber & drill file inspection
+- [ ] GitHub Action (`pcb-inspector-action`)
 - [ ] Interactive HTML / Markdown visual report viewer
-- [ ] Automated layout patch suggestion engine
 
 ---
 
