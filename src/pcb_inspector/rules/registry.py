@@ -57,6 +57,7 @@ def init_default_registry() -> RuleRegistry:
     from pcb_inspector.rules.return_paths import GroundPlaneIntegrityRule
     from pcb_inspector.rules.switching_loops import SwitchingLoopGeometryRule
     from pcb_inspector.rules.trace_width import PowerTraceWidthRule
+    from pcb_inspector.rules.vision_review import VisionReviewRule
 
     reg = RuleRegistry()
     # Layer 1: KiCad Native DRC & ERC
@@ -68,6 +69,9 @@ def init_default_registry() -> RuleRegistry:
     reg.register(DifferentialPairSkewRule())
     reg.register(SwitchingLoopGeometryRule())
     reg.register(GroundPlaneIntegrityRule())
+
+    # Layer 3: Multimodal Vision AI Review
+    reg.register(VisionReviewRule())
 
     return reg
 

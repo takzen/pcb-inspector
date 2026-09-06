@@ -43,10 +43,15 @@ class InspectorConfig(BaseModel):
 
     # Vision settings
     vision_model: str = Field(
-        default="gemini-3.8-flash", description="Model identifier for visual inspection"
+        default="gemini-3.8-flash",
+        description="Model identifier for visual inspection (gemini-3.8-flash, fable-5, gpt-6-astra)",
     )
     vision_api_key_env: str = Field(
         default="GEMINI_API_KEY", description="Environment variable holding the Vision API key"
+    )
+    vision_cache_dir: str = Field(
+        default=".pcb_vision_cache",
+        description="Directory used to cache multimodal vision model inspection results",
     )
 
     # Reporting and behavior

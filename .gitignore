@@ -57,6 +57,7 @@ fp-info-cache
 reports/
 output/
 renders/
+.pcb_vision_cache/
 *.log
 
 # Environment variables & secrets

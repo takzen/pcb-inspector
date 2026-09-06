@@ -67,6 +67,26 @@ Prints a formatted table of all currently registered rules, their unique Rule ID
 | `--format` | `-f` | `markdown` | Output report format: `markdown`, `json`, or `both`. |
 | `--fail-on` | N/A | `CRITICAL` | Severity threshold triggering exit code `1`: `CRITICAL`, `WARNING`, `SUGGESTION`. |
 | `--config` | `-c` | `None` | Explicit path to a custom YAML configuration file. |
+| `--vision` | N/A | `false` | Enable Layer 3 Multimodal Vision AI review. |
+| `--vision-model` | N/A | `gemini-3.8-flash` | Model identifier: `gemini-3.8-flash`, `fable-5`, `gpt-6-astra`, `mock`. |
+
+### `pcb-inspector vision [OPTIONS] PROJECT_PATH`
+Executes dedicated Layer 3 Multimodal Visual Review directly on a PCB layout:
+```bash
+# Run visual review with default vision model (Gemini Flash 3.8)
+pcb-inspector vision path/to/board.kicad_pcb
+
+# Run visual review with GPT-6 Astra or Fable 5
+pcb-inspector vision path/to/board.kicad_pcb --model gpt-6-astra -o visual-report.md
+```
+
+| Option | Flag | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `PROJECT_PATH` | *(Argument)* | *(Required)* | Path to KiCad PCB layout (`.kicad_pcb`). |
+| `--output` | `-o` | `None` | File path to save generated report. |
+| `--format` | `-f` | `markdown` | Format: `markdown`, `json`, or `both`. |
+| `--model` | `-m` | `gemini-3.8-flash` | Vision model: `gemini-3.8-flash`, `fable-5`, `gpt-6-astra`, `mock`. |
+| `--config` | `-c` | `None` | Custom YAML configuration file. |
 
 ---
 
@@ -163,6 +183,9 @@ custom_rules:
 | `max_diff_pair_skew_mm` | `float` | `0.15` | Maximum trace length difference (in mm) between positive and negative traces of a differential pair (`_P`/`_N`, `+`/`-`). |
 | `max_switching_loop_area_mm2` | `float` | `50.0` | Maximum convex hull loop area (in mm²) between switching inductor, diode/FET, and input/output capacitors. |
 | `min_gnd_overlap_ratio` | `float` | `0.85` | Minimum fraction of signal trace length that must run directly over a continuous ground polygon. |
+| `vision_model` | `string` | `"gemini-3.8-flash"` | Vision LLM model identifier: `"gemini-3.8-flash"`, `"fable-5"`, `"gpt-6-astra"`, `"mock"`. |
+| `vision_api_key_env` | `string` | `"GEMINI_API_KEY"` | Environment variable holding API credentials (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `FABLE_API_KEY`). |
+| `vision_cache_dir` | `string` | `".pcb_vision_cache"` | Cache directory storing model responses to eliminate redundant API billing. |
 | `fail_on` | `string` | `"CRITICAL"` | Finding severity that triggers non-zero exit code: `"CRITICAL"`, `"WARNING"`, `"SUGGESTION"`. |
 | `custom_rules` | `dict` | `{}` | Per-rule dictionary for toggling `enabled: true/false` and custom parameters. |
 
@@ -179,6 +202,7 @@ custom_rules:
 | `HEUR-DIFF-001` | Differential Pair Skew & Length Matching | `SIGNAL_INTEGRITY` | `WARNING` | Calculates trace length skew between complementary differential pair nets (`_P`/`_N`, `+`/`-`). |
 | `HEUR-DCDC-001` | Switching Loop Area | `EMC_EMI` | `WARNING` | Computes the geometric loop area of high-di/dt switching nodes in DC-DC converters to minimize radiated EMI. |
 | `HEUR-GND-001` | Ground Return Path Continuity | `SIGNAL_INTEGRITY` | `WARNING` | Checks for continuous ground reference beneath high-speed signal tracks using polygon clipping. |
+| `VISION-AI-001` | Multimodal Visual Review | `VISION` | `WARNING` | Audits 2D PCB renders with vision AI for silkscreen polarity, Pin 1 indicators, acid traps, and mechanical edge collisions. |
 
 ---
 

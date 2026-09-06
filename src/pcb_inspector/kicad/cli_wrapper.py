@@ -63,6 +63,18 @@ class KiCadCli:
 
         return None
 
+    @classmethod
+    def detect(cls) -> KiCadCli | None:
+        """Attempt to locate kicad-cli on the system and return an instance, or None."""
+        exe = cls.find_executable()
+        if exe:
+            return cls(exe)
+        return None
+
+    def is_available(self) -> bool:
+        """Return True if the configured executable exists and is runnable."""
+        return self.executable.exists() and os.access(self.executable, os.X_OK)
+
     def _resolve_executable(self, candidate: str | Path | None) -> Path:
         resolved = self.find_executable(candidate)
         if not resolved:

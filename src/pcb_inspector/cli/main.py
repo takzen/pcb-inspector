@@ -102,6 +102,14 @@ def check(
     config_file: Path | None = typer.Option(
         None, "--config", "-c", help="Path to custom configuration YAML file"
     ),
+    enable_vision: bool | None = typer.Option(
+        None, "--vision/--no-vision", help="Enable or disable Layer 3 multimodal vision AI inspection"
+    ),
+    vision_model: str | None = typer.Option(
+        None,
+        "--vision-model",
+        help="Vision LLM model identifier (gemini-3.8-flash, fable-5, gpt-6-astra, mock)",
+    ),
 ) -> None:
     """Run verification pipeline on a KiCad project."""
     start_time = time.perf_counter()
@@ -117,6 +125,10 @@ def check(
     project_dir = project_path if project_path.is_dir() else project_path.parent
     cfg = InspectorConfig.load(config_file, project_dir=project_dir)
     cfg.fail_on = threshold
+    if enable_vision is not None:
+        cfg.enable_vision = enable_vision
+    if vision_model is not None:
+        cfg.vision_model = vision_model
 
     console.print(f"[bold]Starting inspection of:[/bold] [cyan]{project_path}[/cyan]")
 
@@ -150,6 +162,75 @@ def check(
             console.print(f"Saved Markdown report to: [green]{md_path}[/green]")
 
     # Exit code based on pass/fail
+    if not result.summary.passed:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def vision(
+    project_path: Path = typer.Argument(
+        ...,
+        help="Path to KiCad PCB (.kicad_pcb) or project directory",
+        exists=True,
+        readable=True,
+    ),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="File path to save the generated report"
+    ),
+    report_format: str = typer.Option(
+        "markdown", "--format", "-f", help="Report format: markdown, json, or both"
+    ),
+    vision_model: str = typer.Option(
+        "gemini-3.8-flash",
+        "--model",
+        "-m",
+        help="Vision model to use: gemini-3.8-flash, fable-5, gpt-6-astra, mock",
+    ),
+    config_file: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to custom configuration YAML file"
+    ),
+) -> None:
+    """Run dedicated Layer 3 Multimodal Visual Review on a PCB layout."""
+    start_time = time.perf_counter()
+
+    project_dir = project_path if project_path.is_dir() else project_path.parent
+    cfg = InspectorConfig.load(config_file, project_dir=project_dir)
+    cfg.enable_vision = True
+    cfg.vision_model = vision_model
+
+    console.print(
+        f"[bold]Starting Multimodal Vision Review ([cyan]{vision_model}[/cyan]):[/bold] [cyan]{project_path}[/cyan]"
+    )
+
+    from pcb_inspector.rules.vision_review import VisionReviewRule
+
+    rule = VisionReviewRule()
+    findings = rule.evaluate(context=project_path, config=cfg)
+
+    duration = time.perf_counter() - start_time
+    result = AuditResult.create(
+        project_path=str(project_path),
+        findings=findings,
+        tool_version=__version__,
+        duration_seconds=duration,
+        fail_on=cfg.fail_on,
+    )
+
+    terminal_reporter = TerminalReporter(console=console)
+    terminal_reporter.print_result(result)
+
+    if output:
+        fmt = report_format.lower()
+        if fmt in ("json", "both"):
+            json_path = output if fmt == "json" else output.with_suffix(".json")
+            JsonReporter().write_to_file(result, json_path)
+            console.print(f"Saved JSON report to: [green]{json_path}[/green]")
+
+        if fmt in ("markdown", "md", "both"):
+            md_path = output if fmt in ("markdown", "md") else output.with_suffix(".md")
+            MarkdownReporter().write_to_file(result, md_path)
+            console.print(f"Saved Markdown report to: [green]{md_path}[/green]")
+
     if not result.summary.passed:
         raise typer.Exit(code=1)
 

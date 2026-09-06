@@ -8,6 +8,7 @@ from pcb_inspector.rules.registry import RuleRegistry, default_registry, init_de
 from pcb_inspector.rules.return_paths import GroundPlaneIntegrityRule
 from pcb_inspector.rules.switching_loops import SwitchingLoopGeometryRule
 from pcb_inspector.rules.trace_width import PowerTraceWidthRule
+from pcb_inspector.rules.vision_review import VisionReviewRule
 
 __all__ = [
     "BaseRule",
@@ -18,6 +19,7 @@ __all__ = [
     "PowerTraceWidthRule",
     "RuleRegistry",
     "SwitchingLoopGeometryRule",
+    "VisionReviewRule",
     "default_registry",
     "init_default_registry",
 ]
