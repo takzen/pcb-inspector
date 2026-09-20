@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from pcb_inspector.cli.main import app
 from pcb_inspector.core.aggregator import FindingAggregator
 from pcb_inspector.core.config import InspectorConfig
+from pcb_inspector.core.layers import HEURISTIC_CATEGORIES
 from pcb_inspector.core.models import AuditResult, FindingCategory, Severity
 from pcb_inspector.rules.registry import default_registry
 
@@ -166,3 +168,52 @@ def test_cli_golden_sample_reports(tmp_path: Path) -> None:
     html_content = (flawed_out_dir / "flawed_result.html").read_text(encoding="utf-8")
     assert "HEUR-DEC-001" in html_content
     assert "HEUR-PWR-001" in html_content
+
+
+MIXED_SIGNAL_BOARD_PATH = (
+    GOLDEN_SAMPLES_DIR / "mixed_signal_board" / "mixed_signal_board.kicad_pcb"
+)
+
+
+def test_mixed_signal_board_benchmark() -> None:
+    """Benchmark: an STM32-style board must yield real defects and no false ones.
+
+    This board is built from the exact confusions the heuristics used to make.
+    Against the pre-fix engine it produced one finding, and that finding was
+    wrong (SWCLK read as a DC/DC switching node), while both genuine defects
+    went unreported.
+    """
+    assert MIXED_SIGNAL_BOARD_PATH.exists()
+    cfg = InspectorConfig(enable_vision=False)
+
+    raw_findings = default_registry.evaluate_filtered(
+        context=MIXED_SIGNAL_BOARD_PATH,
+        config=cfg,
+        categories=HEURISTIC_CATEGORIES,
+    )
+    findings = FindingAggregator(config=cfg).aggregate(raw_findings)
+    by_rule = {f.rule_id for f in findings}
+
+    # No false positives: SWCLK, SWDIO and PHY_TXD span the board but none is a
+    # regulator switching node, and there is no inductor anywhere on it.
+    assert "HEUR-DCDC-001" not in by_rule
+
+    # The board has a B.Cu ground pour covering all routing.
+    assert "HEUR-GND-001" not in by_rule
+
+    # Real defect 1: CN1 is a connector on +3V3, not a bypass capacitor, so U1
+    # has no decoupling at all.
+    dec = [f for f in findings if f.rule_id == "HEUR-DEC-001"]
+    assert len(dec) == 1
+    assert dec[0].severity is Severity.CRITICAL
+    assert dec[0].id == "DEC-MISSING-U1-1"
+    assert dec[0].actionable_fix is not None
+    assert dec[0].actionable_fix.action_type == "ADD_DECOUPLING_CAPACITOR"
+
+    # Real defect 2: USB_DP is 35mm and USB_DM is 20mm.
+    diff = [f for f in findings if f.rule_id == "HEUR-DIFF-001"]
+    assert len(diff) == 1
+    assert diff[0].raw_data["skew_mm"] == pytest.approx(15.0)
+    assert set(diff[0].nets) == {"USB_DP", "USB_DM"}
+
+    assert len(findings) == 2, [f.id for f in findings]
