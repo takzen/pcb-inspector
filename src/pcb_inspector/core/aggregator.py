@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable
+
+from shapely import STRtree
+from shapely.geometry import Point
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import (
     ActionableFix,
-    Coordinate,
     Finding,
     FindingCategory,
     Severity,
 )
-
-
-def _distance_coords(c1: Coordinate, c2: Coordinate) -> float:
-    """Euclidean distance between two coordinates in mm."""
-    return math.hypot(c1.x - c2.x, c1.y - c2.y)
 
 
 class FindingAggregator:
@@ -62,42 +58,92 @@ class FindingAggregator:
         return sorted(findings, key=sort_key)
 
     def _correlate_findings(self, findings: list[Finding]) -> None:
-        """Find related issues across layers and link them via correlated_with."""
-        n = len(findings)
-        for i in range(n):
-            for j in range(i + 1, n):
+        """Find related issues across layers and link them via correlated_with.
+
+        Candidate pairs come from an inverted component index and an R-tree over
+        finding coordinates, rather than from comparing every finding with every
+        other one. The comparison itself is unchanged, so the resulting links are
+        identical; only the number of pairs examined differs. The quadratic scan
+        it replaces cost ~18s on 4000 findings, which a dense multi-layer board
+        reaches easily.
+        """
+        pairs: set[tuple[int, int]] = set()
+        self._collect_component_pairs(findings, pairs)
+        self._collect_spatial_pairs(findings, pairs)
+
+        # Materialise in index order so the contents of correlated_with match
+        # what the pairwise scan produced.
+        partners: dict[int, list[int]] = {}
+        for i, j in pairs:
+            partners.setdefault(i, []).append(j)
+            partners.setdefault(j, []).append(i)
+
+        for idx, others in partners.items():
+            finding = findings[idx]
+            for other in sorted(others):
+                other_id = findings[other].id
+                if other_id not in finding.correlated_with:
+                    finding.correlated_with.append(other_id)
+
+    @staticmethod
+    def _collect_component_pairs(
+        findings: list[Finding], pairs: set[tuple[int, int]]
+    ) -> None:
+        """Criterion A: findings sharing a component designator.
+
+        They correlate when they also share a net, or when they come from
+        different engineering categories (the same defect seen by two layers).
+        """
+        by_component: dict[str, list[int]] = {}
+        for idx, f in enumerate(findings):
+            for comp in set(f.components):
+                by_component.setdefault(comp, []).append(idx)
+
+        for bucket in by_component.values():
+            if len(bucket) < 2:
+                continue
+            for pos, i in enumerate(bucket):
                 f1 = findings[i]
-                f2 = findings[j]
+                nets1 = set(f1.nets)
+                for j in bucket[pos + 1 :]:
+                    if (i, j) in pairs:
+                        continue
+                    f2 = findings[j]
+                    if f1.id == f2.id:
+                        continue
+                    if nets1 & set(f2.nets) or f1.category != f2.category:
+                        pairs.add((i, j))
 
-                # Don't correlate identical findings or findings from the exact same rule ID on the exact same component
-                if f1.id == f2.id:
+    def _collect_spatial_pairs(
+        self, findings: list[Finding], pairs: set[tuple[int, int]]
+    ) -> None:
+        """Criterion B: findings with coordinates within the correlation radius."""
+        points: list[Point] = []
+        owner: list[int] = []
+        for idx, f in enumerate(findings):
+            for c in f.coordinates:
+                points.append(Point(c.x, c.y))
+                owner.append(idx)
+
+        if len(points) < 2:
+            return
+
+        tree = STRtree(points)
+        for point_idx, point in enumerate(points):
+            i = owner[point_idx]
+            neighbours = tree.query(
+                point, predicate="dwithin", distance=self.correlation_radius_mm
+            )
+            for neighbour_idx in neighbours:
+                j = owner[neighbour_idx]
+                if i == j:
                     continue
-
-                is_correlated = False
-
-                # Criterion A: Shared component RefDes
-                shared_components = set(f1.components) & set(f2.components)
-                if shared_components:
-                    # If they also share a net or are physically close
-                    shared_nets = set(f1.nets) & set(f2.nets)
-                    if shared_nets or f1.category != f2.category:
-                        is_correlated = True
-
-                # Criterion B: Physical spatial overlap within correlation radius
-                if not is_correlated and f1.coordinates and f2.coordinates:
-                    for c1 in f1.coordinates:
-                        for c2 in f2.coordinates:
-                            if _distance_coords(c1, c2) <= self.correlation_radius_mm:
-                                is_correlated = True
-                                break
-                        if is_correlated:
-                            break
-
-                if is_correlated:
-                    if f2.id not in f1.correlated_with:
-                        f1.correlated_with.append(f2.id)
-                    if f1.id not in f2.correlated_with:
-                        f2.correlated_with.append(f1.id)
+                lo, hi = (i, j) if i < j else (j, i)
+                if (lo, hi) in pairs:
+                    continue
+                if findings[lo].id == findings[hi].id:
+                    continue
+                pairs.add((lo, hi))
 
     def _synthesize_actionable_fix(self, f: Finding) -> ActionableFix | None:
         """Derive a concrete agent-executable repair action from a finding.

@@ -479,3 +479,62 @@ def test_invalid_custom_rule_value_falls_back_to_default() -> None:
     cfg = InspectorConfig(custom_rules={"HEUR-DCDC-001": {"max_loop_area_mm2": "not a number"}})
     rule = SwitchingLoopGeometryRule()
     assert rule.param(cfg, "max_loop_area_mm2", 30.0) == pytest.approx(30.0)
+
+
+# --------------------------------------------------------------------------
+# P2-3: correlation scales without changing its results
+# --------------------------------------------------------------------------
+
+
+def test_correlation_links_shared_component_across_categories() -> None:
+    """Criterion A: same part, different engineering category."""
+    a = _finding("HEUR-DEC-001", FindingCategory.DECOUPLING, id="A", components=["U1"])
+    b = _finding("KICAD-DRC-ERC-001", FindingCategory.DRC_ERC, id="B", components=["U1"])
+    out = {f.id: f.correlated_with for f in FindingAggregator().aggregate([a, b])}
+    assert out["A"] == ["B"]
+    assert out["B"] == ["A"]
+
+
+def test_correlation_links_nearby_coordinates() -> None:
+    """Criterion B: no shared part, but physically coincident."""
+    from pcb_inspector.core.models import Coordinate
+
+    a = _finding("R1", FindingCategory.VISION, id="A",
+                 coordinates=[Coordinate(x=50.0, y=50.0)])
+    b = _finding("R2", FindingCategory.VISION, id="B",
+                 coordinates=[Coordinate(x=51.0, y=50.5)])
+    out = {f.id: f.correlated_with for f in FindingAggregator(correlation_radius_mm=2.5).aggregate([a, b])}
+    assert out["A"] == ["B"]
+
+
+def test_correlation_respects_the_radius() -> None:
+    from pcb_inspector.core.models import Coordinate
+
+    a = _finding("R1", FindingCategory.VISION, id="A",
+                 coordinates=[Coordinate(x=0.0, y=0.0)])
+    b = _finding("R2", FindingCategory.VISION, id="B",
+                 coordinates=[Coordinate(x=40.0, y=0.0)])
+    out = FindingAggregator(correlation_radius_mm=2.5).aggregate([a, b])
+    assert all(f.correlated_with == [] for f in out)
+
+
+def test_correlation_stays_linear_enough_to_finish() -> None:
+    """A dense board reaches thousands of findings; the old scan took ~19s at 4000."""
+    import time
+
+    from pcb_inspector.core.models import Coordinate
+
+    findings = [
+        _finding(
+            f"RULE-{i % 7}",
+            list(FindingCategory)[i % len(FindingCategory)],
+            id=f"F-{i:05d}",
+            components=[f"U{i % 300}"],
+            nets=[f"NET{i % 400}"],
+            coordinates=[Coordinate(x=float(i % 200), y=float((i * 7) % 200))],
+        )
+        for i in range(4000)
+    ]
+    start = time.perf_counter()
+    FindingAggregator().aggregate(findings)
+    assert time.perf_counter() - start < 5.0
