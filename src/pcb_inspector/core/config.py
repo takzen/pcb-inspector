@@ -26,6 +26,13 @@ class InspectorConfig(BaseModel):
     enable_vision: bool = Field(
         default=False, description="Run multimodal visual inspection with LLM"
     )
+    require_kicad_cli: bool = Field(
+        default=False,
+        description=(
+            "Treat a missing kicad-cli as a CRITICAL finding instead of a WARNING. "
+            "Recommended in CI, where a silently skipped Layer 1 would otherwise pass."
+        ),
+    )
 
     # Heuristic thresholds
     max_decoupling_distance_mm: float = Field(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 
+from pcb_inspector.core.layers import incomplete_layers
 from pcb_inspector.core.models import AuditResult, Severity
 from pcb_inspector.reporters.base import BaseReporter
 
@@ -27,6 +28,19 @@ class HtmlReporter(BaseReporter):
 
         status_text = "PASSED" if s.passed else "FAILED"
         status_color = "#238636" if s.passed else "#da3633"
+
+        # An incomplete audit must never read as a clean one.
+        skipped = incomplete_layers(result.metadata)
+        incomplete_html = ""
+        if skipped:
+            items = "".join(f"<li>{html.escape(item)}</li>" for item in skipped)
+            incomplete_html = (
+                '<div class="incomplete-banner">'
+                "<strong>&#9888; Incomplete audit — this board was not fully checked.</strong>"
+                f"<ul>{items}</ul>"
+                "<span>The metrics below reflect only the layers that ran.</span>"
+                "</div>"
+            )
 
         # Generate findings HTML cards
         cards_html: list[str] = []
@@ -246,6 +260,18 @@ body {{
 .fix-badge {{ font-size: 0.75rem; font-weight: 800; color: #fbbf24; text-transform: uppercase; }}
 .fix-desc {{ font-size: 0.875rem; color: #e2e8f0; }}
 
+.incomplete-banner {{
+    background: #2b2205;
+    border: 1px solid #d29922;
+    border-left: 4px solid #d29922;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.5rem;
+    color: #f2cc60;
+}}
+.incomplete-banner ul {{ margin: 0.5rem 0 0.5rem 1.25rem; }}
+.incomplete-banner span {{ font-size: 0.875rem; color: #d1d5db; }}
+
 .empty-state {{
     text-align: center;
     padding: 4rem 2rem;
@@ -278,6 +304,8 @@ body {{
             <div style="font-size: 0.8rem; color: var(--text-muted);">{result.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}</div>
         </div>
     </div>
+
+    {incomplete_html}
 
     <div class="metrics-grid">
         <div class="metric-card" style="border-color: {score_color};">

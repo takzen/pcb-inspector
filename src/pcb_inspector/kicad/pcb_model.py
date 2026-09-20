@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pcb_inspector.core.exceptions import ProjectParsingError
 from pcb_inspector.kicad.sexpr_parser import find_all, find_first, get_value, parse_sexpr
+
+logger = logging.getLogger(__name__)
 
 
 class Pad(BaseModel):
@@ -162,14 +165,39 @@ class PcbBoard(BaseModel):
         return caps
 
 
+def _safe_float(node: list[Any] | None, index: int, default: float, context: str) -> float:
+    """Read a numeric atom from an S-expression node, tolerating malformed values.
+
+    KiCad files occasionally carry non-numeric atoms where a number is expected
+    (hand-edited files, unsupported format revisions). A bare float() there
+    escapes as a raw ValueError that callers cannot distinguish from a bug, so
+    the value is logged and replaced with a documented default instead.
+    """
+    if node is None or not isinstance(node, list) or len(node) <= index:
+        return default
+    raw = node[index]
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Non-numeric value %r at index %d of %s; falling back to %s.",
+            raw,
+            index,
+            context,
+            default,
+        )
+        return default
+
+
 def _parse_coords(node: list[Any] | None) -> tuple[float, float, float]:
     """Parse (at x y [rot]) into (x, y, rot)."""
     if not node or not isinstance(node, list):
         return (0.0, 0.0, 0.0)
-    x = float(node[1]) if len(node) > 1 else 0.0
-    y = float(node[2]) if len(node) > 2 else 0.0
-    rot = float(node[3]) if len(node) > 3 else 0.0
-    return (x, y, rot)
+    return (
+        _safe_float(node, 1, 0.0, "(at x ...)"),
+        _safe_float(node, 2, 0.0, "(at . y ...)"),
+        _safe_float(node, 3, 0.0, "(at . . rot)"),
+    )
 
 
 def load_pcb_board(file_path: Path | str) -> PcbBoard:
@@ -317,11 +345,11 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
         if not start_node or not end_node:
             continue
 
-        sx = float(start_node[1]) if len(start_node) > 1 else 0.0
-        sy = float(start_node[2]) if len(start_node) > 2 else 0.0
-        ex = float(end_node[1]) if len(end_node) > 1 else 0.0
-        ey = float(end_node[2]) if len(end_node) > 2 else 0.0
-        w = float(width_node[1]) if width_node and len(width_node) > 1 else 0.25
+        sx = _safe_float(start_node, 1, 0.0, "segment (start x)")
+        sy = _safe_float(start_node, 2, 0.0, "segment (start y)")
+        ex = _safe_float(end_node, 1, 0.0, "segment (end x)")
+        ey = _safe_float(end_node, 2, 0.0, "segment (end y)")
+        w = _safe_float(width_node, 1, 0.25, "segment (width)")
         lay = str(layer_node[1]) if layer_node and len(layer_node) > 1 else "F.Cu"
 
         net_n = 0
@@ -356,8 +384,8 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
         layer_node = find_first(via_node, "layers")
         net_node = find_first(via_node, "net")
 
-        v_size = float(size_node[1]) if size_node and len(size_node) > 1 else 0.8
-        v_drill = float(drill_node[1]) if drill_node and len(drill_node) > 1 else 0.4
+        v_size = _safe_float(size_node, 1, 0.8, "via (size)")
+        v_drill = _safe_float(drill_node, 1, 0.4, "via (drill)")
 
         v_layers = ("F.Cu", "B.Cu")
         if layer_node and len(layer_node) >= 3:
@@ -392,11 +420,16 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
         z_net_num = 0
         z_net_name = ""
         if net_node and len(net_node) > 1:
+            raw_net = net_node[1]
             try:
-                z_net_num = int(net_node[1])
+                z_net_num = int(raw_net)
                 z_net_name = nets.get(z_net_num, "")
             except ValueError:
-                pass
+                z_net_name = str(raw_net)
+                for num, name in nets.items():
+                    if name == z_net_name:
+                        z_net_num = num
+                        break
         z_layer = str(layer_node[1]) if layer_node and len(layer_node) > 1 else "B.Cu"
 
         poly_node = find_first(z_node, "polygon")

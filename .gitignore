@@ -1,5 +1,6 @@
 # Local task planning & notes (keep local only)
 PLAN.md
+PLAN_NAPRAWY.md
 *.local.md
 scratch/
 
@@ -76,3 +77,8 @@ renders/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local-only tooling (freerouting JARs ~130MB - download from upstream releases)
+tools/
+logs/
+test_*.kicad_pcb

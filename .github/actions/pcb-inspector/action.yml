@@ -51,6 +51,18 @@ runs:
     - name: Install uv
       uses: astral-sh/setup-uv@v5
 
+    # Layer 1 is the deterministic ground truth of the audit. Without kicad-cli
+    # on PATH the action silently degrades to heuristics only, so it is
+    # installed here and the run is made to fail if it is still missing.
+    - name: Install KiCad CLI
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo add-apt-repository --yes ppa:kicad/kicad-9.0-releases
+        sudo apt-get update
+        sudo apt-get install --yes --no-install-recommends kicad-cli
+        kicad-cli version
+
     - name: Install pcb-inspector
       shell: bash
       run: |
@@ -77,6 +89,7 @@ runs:
           --output "${{ inputs.output_dir }}/pcb_report" \
           --format all \
           --fail-on "${{ inputs.fail_on }}" \
+          --require-kicad-cli \
           $VISION_FLAG \
           $CONFIG_ARG
         EXIT_CODE=$?

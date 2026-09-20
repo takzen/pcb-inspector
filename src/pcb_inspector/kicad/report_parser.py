@@ -6,6 +6,7 @@ import json
 import re
 from typing import Any
 
+from pcb_inspector.core.exceptions import ProjectParsingError
 from pcb_inspector.core.models import Coordinate, Finding, FindingCategory, Severity
 
 # Regex patterns to extract components and nets from KiCad descriptions
@@ -61,14 +62,42 @@ def extract_coordinates(items: list[dict[str, Any]]) -> list[Coordinate]:
     return coords
 
 
+def _load_report(report_input: str | dict[str, Any], kind: str) -> dict[str, Any] | None:
+    """Decode a kicad-cli report payload into a dict.
+
+    Returns None for empty input (nothing was produced). Malformed input raises
+    rather than degrading to an empty finding list, which would be
+    indistinguishable from a clean board.
+
+    Raises:
+        ProjectParsingError: If the payload is not decodable as a JSON object.
+    """
+    if not isinstance(report_input, str):
+        return report_input
+
+    if not report_input.strip():
+        return None
+
+    try:
+        data = json.loads(report_input)
+    except json.JSONDecodeError as err:
+        excerpt = report_input.strip()[:200]
+        raise ProjectParsingError(
+            f"kicad-cli {kind} report is not valid JSON ({err}). Output starts with: {excerpt!r}"
+        ) from err
+
+    if not isinstance(data, dict):
+        raise ProjectParsingError(
+            f"kicad-cli {kind} report must be a JSON object, got {type(data).__name__}."
+        )
+    return data
+
+
 def parse_drc_json(report_input: str | dict[str, Any]) -> list[Finding]:
     """Parse a KiCad DRC JSON report into a list of standardized Findings."""
-    if isinstance(report_input, str):
-        if not report_input.strip():
-            return []
-        data: dict[str, Any] = json.loads(report_input)
-    else:
-        data = report_input
+    data = _load_report(report_input, "DRC")
+    if data is None:
+        return []
 
     findings: list[Finding] = []
 
@@ -155,12 +184,9 @@ def parse_drc_json(report_input: str | dict[str, Any]) -> list[Finding]:
 
 def parse_erc_json(report_input: str | dict[str, Any]) -> list[Finding]:
     """Parse a KiCad ERC JSON report into a list of standardized Findings."""
-    if isinstance(report_input, str):
-        if not report_input.strip():
-            return []
-        data: dict[str, Any] = json.loads(report_input)
-    else:
-        data = report_input
+    data = _load_report(report_input, "ERC")
+    if data is None:
+        return []
 
     findings: list[Finding] = []
     sheets = data.get("sheets", [])

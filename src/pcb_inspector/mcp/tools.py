@@ -9,6 +9,7 @@ from typing import Any
 from pcb_inspector import __version__
 from pcb_inspector.core.aggregator import FindingAggregator
 from pcb_inspector.core.config import InspectorConfig
+from pcb_inspector.core.layers import evaluate_layer_status, incomplete_layers
 from pcb_inspector.core.models import AuditResult, Severity
 from pcb_inspector.rules.decoupling import DecouplingProximityRule
 from pcb_inspector.rules.kicad_drc_erc import KiCadDrcErcRule
@@ -85,18 +86,24 @@ def inspect_project_tool(
     findings = FindingAggregator().aggregate(raw_findings)
 
     duration = time.perf_counter() - start_time
+    layers = evaluate_layer_status(findings, cfg, categories=None)
     result = AuditResult.create(
         project_path=str(p),
         findings=findings,
         tool_version=__version__,
         duration_seconds=duration,
         fail_on=threshold,
+        metadata={"layers": layers},
     )
 
     return {
         "project_path": str(p),
         "passed": result.summary.passed,
         "health_score": result.health_score,
+        "layers": layers,
+        # Non-empty when the audit did not cover the whole board. An agent must
+        # not treat passed=True as "board is clean" while this is populated.
+        "incomplete_layers": incomplete_layers(result.metadata),
         "summary": {
             "critical": result.summary.critical_count,
             "warning": result.summary.warning_count,

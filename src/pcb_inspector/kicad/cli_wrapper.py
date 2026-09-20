@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -13,6 +14,18 @@ from pcb_inspector.core.exceptions import KiCadCliExecutionError, KiCadCliNotFou
 
 if TYPE_CHECKING:
     from pcb_inspector.core.models import Finding
+
+logger = logging.getLogger(__name__)
+
+#: Wall-clock limit for any single kicad-cli invocation. Without it a stalled
+#: kicad-cli hangs the whole audit (and the CI job) indefinitely.
+DEFAULT_TIMEOUT_SECONDS = 300
+
+#: kicad-cli returns 5 from `pcb drc` / `sch erc` when `--exit-code-violations`
+#: is passed and violations exist. That is a successful run reporting findings,
+#: not an execution failure. Every other non-zero code is a real error
+#: (verified against KiCad 9.0.7: corrupt board -> rc=3 "Failed to load board").
+VIOLATIONS_EXIT_CODE = 5
 
 
 class KiCadCli:
@@ -83,14 +96,46 @@ class KiCadCli:
             )
         return resolved
 
+    def _run(
+        self,
+        cmd: list[str],
+        action: str,
+        timeout: float | None = DEFAULT_TIMEOUT_SECONDS,
+    ) -> subprocess.CompletedProcess[str]:
+        """Execute a kicad-cli command, converting process failures into KiCadCliExecutionError.
+
+        Args:
+            cmd: Full argument vector, including the executable.
+            action: Human-readable operation name used in error messages.
+            timeout: Wall-clock limit in seconds; None disables it.
+
+        Raises:
+            KiCadCliExecutionError: On timeout or OS-level spawn failure.
+        """
+        logger.debug("Running kicad-cli: %s", " ".join(cmd))
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as err:
+            raise KiCadCliExecutionError(
+                f"{action} timed out after {timeout}s. Command: {' '.join(cmd)}"
+            ) from err
+        except OSError as err:
+            raise KiCadCliExecutionError(f"{action} could not be started: {err}") from err
+
+    @staticmethod
+    def _check_returncode(res: subprocess.CompletedProcess[str], action: str) -> None:
+        """Raise KiCadCliExecutionError unless the process reported success or violations."""
+        if res.returncode in (0, VIOLATIONS_EXIT_CODE):
+            return
+        detail = (res.stderr or res.stdout or "").strip() or "no diagnostic output"
+        raise KiCadCliExecutionError(f"{action} failed (exit code {res.returncode}): {detail}")
+
     def get_version(self) -> str:
         """Return the kicad-cli version string."""
         cmd = [str(self.executable), "version"]
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            return res.stdout.strip()
-        except (subprocess.SubprocessError, OSError) as err:
-            raise KiCadCliExecutionError(f"Failed to query kicad-cli version: {err}") from err
+        res = self._run(cmd, action="kicad-cli version query", timeout=30)
+        self._check_returncode(res, "kicad-cli version query")
+        return res.stdout.strip()
 
     def run_erc(
         self,
@@ -98,8 +143,13 @@ class KiCadCli:
         output_report: Path | str | None = None,
         as_json: bool = True,
         severity_all: bool = True,
+        timeout: float | None = DEFAULT_TIMEOUT_SECONDS,
     ) -> str:
-        """Run Electrical Rules Check (ERC) on a schematic file and return JSON/text string."""
+        """Run Electrical Rules Check (ERC) on a schematic file and return JSON/text string.
+
+        Raises:
+            KiCadCliExecutionError: If kicad-cli fails, times out, or writes no report.
+        """
         sch_path = Path(schematic_path)
         if not sch_path.exists():
             raise FileNotFoundError(f"Schematic file not found: {sch_path}")
@@ -119,11 +169,17 @@ class KiCadCli:
             cmd.append("--severity-all")
         cmd.extend(["--output", str(target_output), str(sch_path)])
 
+        action = f"ERC on {sch_path.name}"
         try:
-            subprocess.run(cmd, capture_output=True, text=True)
-            if Path(target_output).exists():
-                return Path(target_output).read_text(encoding="utf-8")
-            return ""
+            res = self._run(cmd, action=action, timeout=timeout)
+            self._check_returncode(res, action)
+            report = Path(target_output)
+            if not report.exists():
+                raise KiCadCliExecutionError(
+                    f"{action} reported success but produced no report at {report}. "
+                    f"stderr: {(res.stderr or '').strip() or 'none'}"
+                )
+            return report.read_text(encoding="utf-8")
         finally:
             if temp_file and temp_file.exists():
                 temp_file.unlink(missing_ok=True)
@@ -135,8 +191,13 @@ class KiCadCli:
         as_json: bool = True,
         severity_all: bool = True,
         units: str = "mm",
+        timeout: float | None = DEFAULT_TIMEOUT_SECONDS,
     ) -> str:
-        """Run Design Rules Check (DRC) on a PCB layout file and return JSON/text string."""
+        """Run Design Rules Check (DRC) on a PCB layout file and return JSON/text string.
+
+        Raises:
+            KiCadCliExecutionError: If kicad-cli fails, times out, or writes no report.
+        """
         p_path = Path(pcb_path)
         if not p_path.exists():
             raise FileNotFoundError(f"PCB file not found: {p_path}")
@@ -156,11 +217,17 @@ class KiCadCli:
             cmd.append("--severity-all")
         cmd.extend(["--units", units, "--output", str(target_output), str(p_path)])
 
+        action = f"DRC on {p_path.name}"
         try:
-            subprocess.run(cmd, capture_output=True, text=True)
-            if Path(target_output).exists():
-                return Path(target_output).read_text(encoding="utf-8")
-            return ""
+            res = self._run(cmd, action=action, timeout=timeout)
+            self._check_returncode(res, action)
+            report = Path(target_output)
+            if not report.exists():
+                raise KiCadCliExecutionError(
+                    f"{action} reported success but produced no report at {report}. "
+                    f"stderr: {(res.stderr or '').strip() or 'none'}"
+                )
+            return report.read_text(encoding="utf-8")
         finally:
             if temp_file and temp_file.exists():
                 temp_file.unlink(missing_ok=True)
@@ -181,11 +248,14 @@ class KiCadCli:
             cmd.extend(["--layers", ",".join(layers)])
         cmd.extend(["--output", str(out_dir), str(p_path)])
 
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            raise KiCadCliExecutionError(f"SVG export failed: {res.stderr}")
+        # Snapshot pre-existing files so stale renders from an earlier run are
+        # not reported as the output of this one.
+        before = set(out_dir.glob("*.svg"))
+        res = self._run(cmd, action="SVG export")
+        self._check_returncode(res, "SVG export")
 
-        return list(out_dir.glob("*.svg"))
+        produced = sorted(set(out_dir.glob("*.svg")) - before)
+        return produced or sorted(out_dir.glob("*.svg"))
 
     def export_gerbers(
         self,
@@ -198,9 +268,8 @@ class KiCadCli:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         cmd = [str(self.executable), "pcb", "export", "gerbers", "--output", str(out_dir), str(p_path)]
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            raise KiCadCliExecutionError(f"Gerber export failed: {res.stderr}")
+        res = self._run(cmd, action="Gerber export")
+        self._check_returncode(res, "Gerber export")
 
         return list(out_dir.glob("*.g*")) + list(out_dir.glob("*.drl"))
 
@@ -220,9 +289,8 @@ class KiCadCli:
             cmd.extend(["--layers", ",".join(layers)])
         cmd.extend(["--output", str(out_file), str(p_path)])
 
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            raise KiCadCliExecutionError(f"PDF export failed: {res.stderr}")
+        res = self._run(cmd, action="PDF export")
+        self._check_returncode(res, "PDF export")
 
         return out_file
 
@@ -237,9 +305,8 @@ class KiCadCli:
         out_file.parent.mkdir(parents=True, exist_ok=True)
 
         cmd = [str(self.executable), "sch", "export", "netlist", "--output", str(out_file), str(sch_path)]
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            raise KiCadCliExecutionError(f"Netlist export failed: {res.stderr}")
+        res = self._run(cmd, action="Netlist export")
+        self._check_returncode(res, "Netlist export")
 
         return out_file
 

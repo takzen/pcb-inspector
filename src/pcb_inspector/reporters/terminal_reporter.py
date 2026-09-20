@@ -17,6 +17,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from pcb_inspector.core.layers import incomplete_layers
 from pcb_inspector.core.models import AuditResult, Severity
 
 
@@ -45,6 +46,20 @@ class TerminalReporter:
             f"Execution time: [yellow]{s.duration_seconds:.2f}s[/yellow]"
         )
         self.console.print(Panel(panel_content, title="⌖ PCB Inspector Audit Report", expand=False))
+
+        # An incomplete audit must never read as a clean one.
+        skipped = incomplete_layers(result.metadata)
+        if skipped:
+            details = "\n".join(f"  • {item}" for item in skipped)
+            self.console.print(
+                Panel(
+                    f"[bold]This audit did not cover the whole board.[/bold]\n{details}\n\n"
+                    "The result below reflects only the layers that ran.",
+                    title="⚠ INCOMPLETE AUDIT",
+                    border_style="yellow",
+                    expand=False,
+                )
+            )
 
         # Metrics Table
         summary_table = Table(title="Summary Metrics", header_style="bold magenta")

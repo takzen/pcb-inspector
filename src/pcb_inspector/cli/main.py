@@ -21,15 +21,19 @@ if sys.platform == "win32":
         except Exception:
             pass
 
+import logging
+
 import typer
 from rich.console import Console
+from rich.logging import RichHandler
 from rich.table import Table
 
 from pcb_inspector import __version__
 from pcb_inspector.cli.watcher import watch_and_run
 from pcb_inspector.core.aggregator import FindingAggregator
 from pcb_inspector.core.config import InspectorConfig
-from pcb_inspector.core.models import AuditResult, FindingCategory, Severity
+from pcb_inspector.core.layers import evaluate_layer_status
+from pcb_inspector.core.models import AuditResult, Finding, FindingCategory, Severity
 from pcb_inspector.kicad.cli_wrapper import KiCadCli
 from pcb_inspector.reporters.html_reporter import HtmlReporter
 from pcb_inspector.reporters.json_reporter import JsonReporter
@@ -54,6 +58,53 @@ HEURISTIC_CATEGORIES = {
     FindingCategory.SILKSCREEN,
     FindingCategory.MECHANICAL,
 }
+
+
+@app.callback()
+def _configure(
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show diagnostic logs from rules and the KiCad CLI"
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error logs"),
+) -> None:
+    """Configure logging before any subcommand runs.
+
+    Without this, every logger.warning/error in the rule engine is discarded and
+    failures such as a missing kicad-cli stay invisible.
+    """
+    if quiet:
+        level = logging.ERROR
+    elif verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.WARNING
+
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[RichHandler(console=console, rich_tracebacks=True, show_path=verbose)],
+        force=True,
+    )
+
+
+def _build_result(
+    project_path: Path,
+    findings: list[Finding],
+    cfg: InspectorConfig,
+    categories: set[FindingCategory] | None,
+    duration: float,
+    threshold: Severity,
+) -> AuditResult:
+    """Assemble the audit result, recording which verification layers actually ran."""
+    return AuditResult.create(
+        project_path=str(project_path),
+        findings=findings,
+        tool_version=__version__,
+        duration_seconds=duration,
+        fail_on=threshold,
+        metadata={"layers": evaluate_layer_status(findings, cfg, categories)},
+    )
 
 
 def _save_and_display_result(
@@ -168,6 +219,11 @@ def check(
         "--vision-model",
         help="Vision LLM model identifier (gemini-3.8-flash, fable-5, gpt-6-astra, mock)",
     ),
+    require_kicad_cli: bool = typer.Option(
+        False,
+        "--require-kicad-cli",
+        help="Fail the run if kicad-cli is missing, instead of silently skipping Layer 1",
+    ),
     watch: bool = typer.Option(
         False, "--watch", "-w", help="Continuously monitor files and re-evaluate on change"
     ),
@@ -180,6 +236,8 @@ def check(
         project_dir = project_path if project_path.is_dir() else project_path.parent
         cfg = InspectorConfig.load(config_file, project_dir=project_dir)
         cfg.fail_on = threshold
+        if require_kicad_cli:
+            cfg.require_kicad_cli = True
         if enable_vision is not None:
             cfg.enable_vision = enable_vision
         if vision_model is not None:
@@ -190,12 +248,13 @@ def check(
         findings = FindingAggregator().aggregate(raw_findings)
 
         duration = time.perf_counter() - start_time
-        result = AuditResult.create(
-            project_path=str(project_path),
+        result = _build_result(
+            project_path=project_path,
             findings=findings,
-            tool_version=__version__,
-            duration_seconds=duration,
-            fail_on=threshold,
+            cfg=cfg,
+            categories=None,
+            duration=duration,
+            threshold=threshold,
         )
         return _save_and_display_result(result, output, report_format)
 
@@ -231,6 +290,11 @@ def drc(
     config_file: Path | None = typer.Option(
         None, "--config", "-c", help="Path to custom configuration YAML file"
     ),
+    require_kicad_cli: bool = typer.Option(
+        False,
+        "--require-kicad-cli",
+        help="Fail the run if kicad-cli is missing, instead of silently skipping Layer 1",
+    ),
     watch: bool = typer.Option(
         False, "--watch", "-w", help="Continuously monitor files and re-evaluate on change"
     ),
@@ -243,6 +307,8 @@ def drc(
         project_dir = project_path if project_path.is_dir() else project_path.parent
         cfg = InspectorConfig.load(config_file, project_dir=project_dir)
         cfg.fail_on = threshold
+        if require_kicad_cli:
+            cfg.require_kicad_cli = True
 
         console.print(f"[bold]Running KiCad DRC/ERC verification:[/bold] [cyan]{project_path}[/cyan]")
         raw_findings = default_registry.evaluate_filtered(
@@ -253,12 +319,13 @@ def drc(
         findings = FindingAggregator().aggregate(raw_findings)
 
         duration = time.perf_counter() - start_time
-        result = AuditResult.create(
-            project_path=str(project_path),
+        result = _build_result(
+            project_path=project_path,
             findings=findings,
-            tool_version=__version__,
-            duration_seconds=duration,
-            fail_on=threshold,
+            cfg=cfg,
+            categories={FindingCategory.DRC_ERC},
+            duration=duration,
+            threshold=threshold,
         )
         return _save_and_display_result(result, output, report_format)
 
@@ -316,12 +383,13 @@ def analyze(
         findings = FindingAggregator().aggregate(raw_findings)
 
         duration = time.perf_counter() - start_time
-        result = AuditResult.create(
-            project_path=str(project_path),
+        result = _build_result(
+            project_path=project_path,
             findings=findings,
-            tool_version=__version__,
-            duration_seconds=duration,
-            fail_on=threshold,
+            cfg=cfg,
+            categories=HEURISTIC_CATEGORIES,
+            duration=duration,
+            threshold=threshold,
         )
         return _save_and_display_result(result, output, report_format)
 
@@ -381,12 +449,13 @@ def vision(
         findings = FindingAggregator().aggregate(raw_findings)
 
         duration = time.perf_counter() - start_time
-        result = AuditResult.create(
-            project_path=str(project_path),
+        result = _build_result(
+            project_path=project_path,
             findings=findings,
-            tool_version=__version__,
-            duration_seconds=duration,
-            fail_on=cfg.fail_on,
+            cfg=cfg,
+            categories={FindingCategory.VISION},
+            duration=duration,
+            threshold=cfg.fail_on,
         )
         return _save_and_display_result(result, output, report_format)
 

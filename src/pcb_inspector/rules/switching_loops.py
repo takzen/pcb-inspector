@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from shapely.geometry import MultiPoint
@@ -10,8 +9,8 @@ from shapely.ops import unary_union
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import Coordinate, Finding, FindingCategory, Severity
-from pcb_inspector.kicad.pcb_model import PcbBoard, load_pcb_board
 from pcb_inspector.rules.base import BaseRule
+from pcb_inspector.rules.board_loader import resolve_board
 
 
 class SwitchingLoopGeometryRule(BaseRule):
@@ -32,21 +31,8 @@ class SwitchingLoopGeometryRule(BaseRule):
     def evaluate(self, context: Any, config: InspectorConfig) -> list[Finding]:
         findings: list[Finding] = []
 
-        board: PcbBoard
-        if isinstance(context, PcbBoard):
-            board = context
-        elif isinstance(context, (str, Path)):
-            p = Path(context)
-            if p.suffix != ".kicad_pcb":
-                pcb_candidate = p.with_suffix(".kicad_pcb") if p.is_file() else (p / f"{p.stem}.kicad_pcb")
-                if not pcb_candidate.exists():
-                    return findings
-                p = pcb_candidate
-            try:
-                board = load_pcb_board(p)
-            except Exception:
-                return findings
-        else:
+        board = resolve_board(context)
+        if board is None:
             return findings
 
         # Scan for switching nets

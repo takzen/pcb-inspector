@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pcb_inspector.core.layers import incomplete_layers
 from pcb_inspector.core.models import AuditResult, Severity
 from pcb_inspector.reporters.base import BaseReporter
 
@@ -21,18 +22,38 @@ class MarkdownReporter(BaseReporter):
             f"- **Tool Version:** `v{result.tool_version}`",
             f"- **Execution Time:** `{s.duration_seconds:.2f}s`",
             "",
-            "## 📊 Summary",
-            "",
-            "| Metric | Count |",
-            "| :--- | :--- |",
-            f"| 🔴 Critical | {s.critical_count} |",
-            f"| 🟠 Warning | {s.warning_count} |",
-            f"| 🟡 Suggestion | {s.suggestion_count} |",
-            f"| 🟢 Pass Checks | {s.pass_count} |",
-            f"| 🛡️ Health Score | **{s.health_score:.0f}/100** |",
-            f"| **Total Findings** | **{s.total_findings}** |",
-            "",
         ]
+
+        # Surfaced before the metrics: a 100/100 score on a partial audit is
+        # misleading unless the reader knows which layers never ran.
+        skipped = incomplete_layers(result.metadata)
+        if skipped:
+            lines.extend(
+                [
+                    "> [!WARNING]",
+                    "> **Incomplete audit — this board was not fully checked.**",
+                    *[f"> - {item}" for item in skipped],
+                    ">",
+                    "> The findings below cover only the layers that ran.",
+                    "",
+                ]
+            )
+
+        lines.extend(
+            [
+                "## 📊 Summary",
+                "",
+                "| Metric | Count |",
+                "| :--- | :--- |",
+                f"| 🔴 Critical | {s.critical_count} |",
+                f"| 🟠 Warning | {s.warning_count} |",
+                f"| 🟡 Suggestion | {s.suggestion_count} |",
+                f"| 🟢 Pass Checks | {s.pass_count} |",
+                f"| 🛡️ Health Score | **{s.health_score:.0f}/100** |",
+                f"| **Total Findings** | **{s.total_findings}** |",
+                "",
+            ]
+        )
 
         if not result.findings:
             lines.extend(
