@@ -245,7 +245,7 @@ def check(
 
         console.print(f"[bold]Starting comprehensive inspection:[/bold] [cyan]{project_path}[/cyan]")
         raw_findings = default_registry.evaluate_all(context=project_path, config=cfg)
-        findings = FindingAggregator().aggregate(raw_findings)
+        findings = FindingAggregator(config=cfg).aggregate(raw_findings)
 
         duration = time.perf_counter() - start_time
         result = _build_result(
@@ -316,7 +316,7 @@ def drc(
             config=cfg,
             categories={FindingCategory.DRC_ERC},
         )
-        findings = FindingAggregator().aggregate(raw_findings)
+        findings = FindingAggregator(config=cfg).aggregate(raw_findings)
 
         duration = time.perf_counter() - start_time
         result = _build_result(
@@ -380,7 +380,7 @@ def analyze(
             config=cfg,
             categories=HEURISTIC_CATEGORIES,
         )
-        findings = FindingAggregator().aggregate(raw_findings)
+        findings = FindingAggregator(config=cfg).aggregate(raw_findings)
 
         duration = time.perf_counter() - start_time
         result = _build_result(
@@ -446,7 +446,7 @@ def vision(
 
         rule = VisionReviewRule()
         raw_findings = rule.evaluate(context=project_path, config=cfg)
-        findings = FindingAggregator().aggregate(raw_findings)
+        findings = FindingAggregator(config=cfg).aggregate(raw_findings)
 
         duration = time.perf_counter() - start_time
         result = _build_result(

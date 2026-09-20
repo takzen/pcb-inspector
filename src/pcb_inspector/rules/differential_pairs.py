@@ -2,18 +2,60 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import Coordinate, Finding, FindingCategory, Severity
+from pcb_inspector.kicad.pcb_model import PcbBoard, TrackSegment, normalize_net
 from pcb_inspector.rules.base import BaseRule
 from pcb_inspector.rules.board_loader import resolve_board
 
-DIFF_PAIR_PATTERNS = [
-    # (regex_match, pos_suffix, neg_suffix)
-    (re.compile(r"^(.*?)[_/-]?(?:P|\+)$", re.IGNORECASE), re.compile(r"^(.*?)[_/-]?(?:N|\-)$", re.IGNORECASE)),
-]
+#: Complementary net-name suffixes, longest first so that USB_DP is matched as
+#: ("_DP", "_DM") and not as ("_P", "_N") with a stray "USB_D" base.
+#: The previous implementation only understood _P/_N and +/-, which misses the
+#: most common pair in consumer electronics (USB D+/D-, written DP/DM) as well
+#: as CAN's H/L convention.
+DIFF_PAIR_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("_DP", "_DM"),
+    ("_TXP", "_TXN"),
+    ("_RXP", "_RXN"),
+    ("_DP", "_DN"),
+    ("_P", "_N"),
+    ("_H", "_L"),
+    ("DP", "DM"),
+    ("+", "-"),
+    ("P", "N"),
+    ("H", "L"),
+)
+
+def _min_base_len(suffix: str) -> int:
+    """Shortest base name accepted for a given suffix.
+
+    A delimited or symbolic suffix is unambiguous, so "D+"/"D-" — the canonical
+    USB naming — is accepted on a one-character base. A bare letter suffix is
+    not: allowing it on short bases would pair VIN with a hypothetical VIP, so
+    those require enough base to look like a real signal name (CLKP/CLKN,
+    CANH/CANL).
+    """
+    return 1 if not suffix[0].isalnum() or suffix.startswith("_") else 3
+
+
+def split_diff_pair_suffix(net_name: str) -> tuple[str, str] | None:
+    """Split a net name into (base, polarity) where polarity is "P" or "N".
+
+    Returns None when the name does not look like half of a differential pair.
+    Matching is case-insensitive but the returned base preserves the original
+    casing so that report text echoes the designer's own naming.
+    """
+    upper = net_name.upper()
+    for pos, neg in DIFF_PAIR_SUFFIXES:
+        for suffix, polarity in ((pos, "P"), (neg, "N")):
+            if not upper.endswith(suffix):
+                continue
+            base = net_name[: len(net_name) - len(suffix)]
+            if len(base) >= _min_base_len(suffix):
+                return base, polarity
+    return None
 
 
 class DifferentialPairSkewRule(BaseRule):
@@ -28,6 +70,17 @@ class DifferentialPairSkewRule(BaseRule):
         "have matched physical trace lengths to prevent common-mode noise and timing jitter."
     )
 
+    @staticmethod
+    def _routed_length(board: PcbBoard, net_name: str, tracks: list[TrackSegment]) -> float:
+        """Total routed length of a net, including vertical travel through vias.
+
+        Summing only track segments understates a net that changes layer, which
+        is exactly where skew between the two halves of a pair creeps in.
+        """
+        planar = sum(t.length for t in tracks)
+        via_count = sum(1 for v in board.vias if normalize_net(v.net_name) == normalize_net(net_name))
+        return planar + via_count * board.thickness
+
     def evaluate(self, context: Any, config: InspectorConfig) -> list[Finding]:
         findings: list[Finding] = []
 
@@ -35,7 +88,7 @@ class DifferentialPairSkewRule(BaseRule):
         if board is None:
             return findings
 
-        max_skew = config.max_diff_pair_skew_mm
+        max_skew = self.param(config, "max_skew_mm", config.max_diff_pair_skew_mm)
 
         # Group nets by base differential name
         all_nets = set(board.nets.values())
@@ -44,13 +97,11 @@ class DifferentialPairSkewRule(BaseRule):
         for net in all_nets:
             if not net:
                 continue
-            # Check for _P or +
-            if net.endswith(("_P", "_p", "+")):
-                base = net[:-2] if net.endswith(("_P", "_p")) else net[:-1]
-                pairs.setdefault(base, {})["P"] = net
-            elif net.endswith(("_N", "_n", "-")):
-                base = net[:-2] if net.endswith(("_N", "_n")) else net[:-1]
-                pairs.setdefault(base, {})["N"] = net
+            split = split_diff_pair_suffix(net)
+            if split is None:
+                continue
+            base, polarity = split
+            pairs.setdefault(base.upper(), {})[polarity] = net
 
         # Evaluate matched pairs
         for base, pair in pairs.items():
@@ -66,8 +117,8 @@ class DifferentialPairSkewRule(BaseRule):
             if not tracks_p or not tracks_n:
                 continue
 
-            len_p = sum(t.length for t in tracks_p)
-            len_n = sum(t.length for t in tracks_n)
+            len_p = self._routed_length(board, net_p, tracks_p)
+            len_n = self._routed_length(board, net_n, tracks_n)
             skew = abs(len_p - len_n)
 
             if skew > max_skew:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,44 @@ from pcb_inspector.core.exceptions import ProjectParsingError
 from pcb_inspector.kicad.sexpr_parser import find_all, find_first, get_value, parse_sexpr
 
 logger = logging.getLogger(__name__)
+
+# Reference designators are matched on the full string, not by first letter.
+# A prefix test classifies USB1 and UART1 as ICs and CN1/CONN2 as capacitors,
+# which both invents violations on connectors and lets a real missing
+# decoupling capacitor hide behind a connector counted as one.
+# The optional trailing letter covers multi-unit parts such as U3A.
+_IC_RE = re.compile(r"^(?:U|IC)\d+[A-Z]?$", re.IGNORECASE)
+_CAP_RE = re.compile(r"^C\d+[A-Z]?$", re.IGNORECASE)
+_IND_RE = re.compile(r"^L\d+[A-Z]?$", re.IGNORECASE)
+_DIODE_RE = re.compile(r"^D\d+[A-Z]?$", re.IGNORECASE)
+_RES_RE = re.compile(r"^R\d+[A-Z]?$", re.IGNORECASE)
+_CONN_RE = re.compile(r"^(?:J|P|CN|CONN|USB|X)\d+[A-Z]?$", re.IGNORECASE)
+
+
+def normalize_net(name: str) -> str:
+    """Canonical form of a net name for comparison.
+
+    KiCad net names are case-sensitive in the file but are routinely written
+    inconsistently (+3V3 vs +3v3). Comparing raw strings in one place and
+    case-folded strings in another silently dropped findings, so all net
+    matching goes through this function.
+    """
+    return name.strip().upper()
+
+
+#: Splits a normalized net name into comparable tokens.
+#: "+3V3" -> {3V3}, "PWR_SW" -> {PWR, SW}, "/power/VBUS" -> {POWER, VBUS}.
+_NET_TOKEN_RE = re.compile(r"[^A-Z0-9]+")
+
+
+def net_tokens(name: str) -> set[str]:
+    """Tokenize a net name for keyword matching.
+
+    Rules must match whole tokens rather than substrings: testing ``"SW" in
+    net_name`` classifies SWCLK and SWDIO as regulator switching nodes, and
+    ``"PH" in net_name`` catches every PHY_* net on an Ethernet board.
+    """
+    return {t for t in _NET_TOKEN_RE.split(normalize_net(name)) if t}
 
 
 class Pad(BaseModel):
@@ -33,7 +72,7 @@ class Pad(BaseModel):
 
     @property
     def is_power_or_gnd(self) -> bool:
-        n = self.net_name.upper()
+        n = normalize_net(self.net_name)
         return any(
             p in n
             for p in (
@@ -54,7 +93,7 @@ class Pad(BaseModel):
 
     @property
     def is_ground(self) -> bool:
-        return "GND" in self.net_name.upper()
+        return "GND" in normalize_net(self.net_name)
 
     @property
     def is_power(self) -> bool:
@@ -75,19 +114,27 @@ class Footprint(BaseModel):
     @property
     def is_ic(self) -> bool:
         """True if component looks like an integrated circuit."""
-        return self.refdes.startswith("U") or self.refdes.startswith("IC")
+        return bool(_IC_RE.match(self.refdes))
 
     @property
     def is_capacitor(self) -> bool:
-        return self.refdes.startswith("C")
+        return bool(_CAP_RE.match(self.refdes))
 
     @property
     def is_inductor(self) -> bool:
-        return self.refdes.startswith("L")
+        return bool(_IND_RE.match(self.refdes))
 
     @property
     def is_diode(self) -> bool:
-        return self.refdes.startswith("D")
+        return bool(_DIODE_RE.match(self.refdes))
+
+    @property
+    def is_resistor(self) -> bool:
+        return bool(_RES_RE.match(self.refdes))
+
+    @property
+    def is_connector(self) -> bool:
+        return bool(_CONN_RE.match(self.refdes))
 
     def get_pad(self, number: str) -> Pad | None:
         for p in self.pads:
@@ -131,7 +178,22 @@ class Zone(BaseModel):
     net_num: int
     net_name: str
     layer: str
+    #: The zone's drawn outline.
     points: list[tuple[float, float]] = Field(default_factory=list)
+    #: Copper KiCad actually poured, one entry per filled island. Empty when
+    #: the board has not been refilled since the zone was drawn.
+    filled_polygons: list[list[tuple[float, float]]] = Field(default_factory=list)
+
+    @property
+    def copper_polygons(self) -> list[list[tuple[float, float]]]:
+        """Polygons representing real copper, falling back to the outline.
+
+        An unfilled board still carries the designer's intent in the outline,
+        so it is used when no filled geometry is present.
+        """
+        if self.filled_polygons:
+            return self.filled_polygons
+        return [self.points] if len(self.points) >= 3 else []
 
 
 class PcbBoard(BaseModel):
@@ -151,18 +213,29 @@ class PcbBoard(BaseModel):
         return self.footprints.get(refdes)
 
     def get_tracks_by_net(self, net_name: str) -> list[TrackSegment]:
-        target = net_name.upper()
-        return [t for t in self.tracks if t.net_name.upper() == target]
+        target = normalize_net(net_name)
+        return [t for t in self.tracks if normalize_net(t.net_name) == target]
 
     def get_capacitors_on_net(self, net_name: str) -> list[Footprint]:
+        target = normalize_net(net_name)
         caps: list[Footprint] = []
         for fp in self.footprints.values():
             if fp.is_capacitor:
                 for pad in fp.pads:
-                    if pad.net_name.upper() == net_name.upper():
+                    if normalize_net(pad.net_name) == target:
                         caps.append(fp)
                         break
         return caps
+
+    def get_pads_on_net(self, net_name: str) -> list[tuple[Footprint, Pad]]:
+        """Return every (footprint, pad) pair connected to the given net."""
+        target = normalize_net(net_name)
+        return [
+            (fp, pad)
+            for fp in self.footprints.values()
+            for pad in fp.pads
+            if normalize_net(pad.net_name) == target
+        ]
 
 
 def _safe_float(node: list[Any] | None, index: int, default: float, context: str) -> float:
@@ -187,6 +260,26 @@ def _safe_float(node: list[Any] | None, index: int, default: float, context: str
             default,
         )
         return default
+
+
+def _zone_points(poly_node: list[Any] | None) -> list[tuple[float, float]]:
+    """Extract the (xy ...) vertex list from a zone polygon node."""
+    if not poly_node:
+        return []
+    pts_node = find_first(poly_node, "pts")
+    if not pts_node:
+        return []
+
+    points: list[tuple[float, float]] = []
+    for xy_node in find_all(pts_node, "xy"):
+        if len(xy_node) >= 3:
+            points.append(
+                (
+                    _safe_float(xy_node, 1, 0.0, "zone (xy x)"),
+                    _safe_float(xy_node, 2, 0.0, "zone (xy y)"),
+                )
+            )
+    return points
 
 
 def _parse_coords(node: list[Any] | None) -> tuple[float, float, float]:
@@ -432,19 +525,24 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
                         break
         z_layer = str(layer_node[1]) if layer_node and len(layer_node) > 1 else "B.Cu"
 
-        poly_node = find_first(z_node, "polygon")
-        pts_list: list[tuple[float, float]] = []
-        if poly_node:
-            pts_node = find_first(poly_node, "pts")
-            if pts_node:
-                for xy_node in find_all(pts_node, "xy"):
-                    if len(xy_node) >= 3:
-                        try:
-                            pts_list.append((float(xy_node[1]), float(xy_node[2])))
-                        except ValueError:
-                            continue
+        # `polygon` is the zone's drawn outline; `filled_polygon` is the copper
+        # KiCad actually poured, which is what a reference-plane check must
+        # measure against. A zone may hold several filled_polygon nodes (one per
+        # island, one per layer), so all of them are collected rather than just
+        # the first.
+        outline = _zone_points(find_first(z_node, "polygon"))
+        filled = [_zone_points(node) for node in find_all(z_node, "filled_polygon")]
+        filled = [pts for pts in filled if len(pts) >= 3]
 
-        zones.append(Zone(net_num=z_net_num, net_name=z_net_name, layer=z_layer, points=pts_list))
+        zones.append(
+            Zone(
+                net_num=z_net_num,
+                net_name=z_net_name,
+                layer=z_layer,
+                points=outline,
+                filled_polygons=filled,
+            )
+        )
 
     return PcbBoard(
         file_path=str(path),

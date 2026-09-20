@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from pcb_inspector.core.aggregator import FindingAggregator
 from pcb_inspector.core.models import (
     AuditResult,
@@ -115,8 +117,23 @@ def test_health_score_calculation() -> None:
     )
 
     summary = AuditSummary.calculate([f_crit, f_warn])
-    # 100 - (1 * 30) - (1 * 10) = 60
-    assert summary.health_score == 60.0
+    # Exponential decay: 100 * exp(-(1/3 + 1/10))
+    assert summary.health_score == pytest.approx(64.8, abs=0.1)
     assert summary.critical_count == 1
     assert summary.warning_count == 1
     assert summary.passed is False
+
+
+def test_health_score_never_saturates_to_zero_early() -> None:
+    """Boards with 4, 10 and 20 CRITICAL findings must remain distinguishable.
+
+    The previous linear penalty clamped every board with four or more CRITICAL
+    findings to exactly 0, erasing the signal that a repair round had made
+    progress.
+    """
+    scores = [AuditSummary.health_score_for(n, 0, 0) for n in (4, 10, 20)]
+    assert scores == sorted(scores, reverse=True)
+    assert len(set(scores)) == 3
+    assert all(s > 0 for s in scores)
+
+    assert AuditSummary.health_score_for(0, 0, 0) == 100.0

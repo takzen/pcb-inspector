@@ -1,9 +1,11 @@
-"""Findings aggregator: deduplication, cross-layer correlation, and actionable fix generation."""
+"""Findings aggregator: cross-layer correlation and actionable fix generation."""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
+from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import (
     ActionableFix,
     Coordinate,
@@ -21,8 +23,16 @@ def _distance_coords(c1: Coordinate, c2: Coordinate) -> float:
 class FindingAggregator:
     """Consolidates findings from DRC/ERC, Heuristics, and Vision AI."""
 
-    def __init__(self, correlation_radius_mm: float = 2.5) -> None:
+    def __init__(
+        self,
+        correlation_radius_mm: float = 2.5,
+        config: InspectorConfig | None = None,
+    ) -> None:
         self.correlation_radius_mm = correlation_radius_mm
+        # Thresholds quoted in generated fixes must match the ones the rules
+        # applied, otherwise an agent repairs towards a different target than
+        # the one it will be re-audited against.
+        self.config = config or InspectorConfig()
 
     def aggregate(self, findings: list[Finding]) -> list[Finding]:
         """Process findings: detect cross-layer correlations, attach actionable fixes, and sort."""
@@ -90,93 +100,183 @@ class FindingAggregator:
                         f2.correlated_with.append(f1.id)
 
     def _synthesize_actionable_fix(self, f: Finding) -> ActionableFix | None:
-        """Derive concrete agent-executable repair action from a finding."""
+        """Derive a concrete agent-executable repair action from a finding.
+
+        Dispatch is keyed on rule_id, not category. Categories are shared
+        between rules, and a category-ordered if-cascade mislabelled every
+        finding whose category another rule claimed first: a missing ground
+        plane (SIGNAL_INTEGRITY) was handed TUNE_DIFF_PAIR_SKEW, and an
+        oversized switching loop (POWER_DELIVERY) was handed WIDEN_TRACE.
+        """
+        builder = _FIX_BUILDERS.get(f.rule_id.upper())
+        if builder is not None:
+            return builder(self, f)
+        return self._fallback_fix(f)
+
+    # -- per-rule builders --------------------------------------------------
+
+    def _fix_decoupling(self, f: Finding) -> ActionableFix:
+        # components is [ic, capacitor] for a distance finding, and [ic] alone
+        # when no capacitor exists on the rail at all.
+        target_comp = f.components[1] if len(f.components) > 1 else None
+        target_ic = f.components[0] if f.components else "IC"
+        max_distance = self._threshold(
+            f, "max_threshold_mm", self.config.max_decoupling_distance_mm
+        )
+        if target_comp is None:
+            return ActionableFix(
+                action_type="ADD_DECOUPLING_CAPACITOR",
+                component=target_ic,
+                net=f.nets[0] if f.nets else None,
+                target_coordinates=f.coordinates[0] if f.coordinates else None,
+                parameters={"target_ic": target_ic, "max_distance_mm": max_distance},
+                description=(
+                    f"Add a 100nF ceramic capacitor within {max_distance:.2f}mm of "
+                    f"{target_ic} power pins."
+                ),
+            )
+        return ActionableFix(
+            action_type="RELOCATE_COMPONENT",
+            component=target_comp,
+            net=f.nets[0] if f.nets else None,
+            target_coordinates=f.coordinates[0] if f.coordinates else None,
+            parameters={"target_ic": target_ic, "max_distance_mm": max_distance},
+            description=(
+                f"Relocate capacitor {target_comp} within {max_distance:.2f}mm of "
+                f"{target_ic} power pins."
+            ),
+        )
+
+    def _fix_trace_width(self, f: Finding) -> ActionableFix:
+        net_name = f.nets[0] if f.nets else None
+        min_width = self._threshold(
+            f, "min_width_threshold_mm", self.config.min_power_trace_width_mm
+        )
+        return ActionableFix(
+            action_type="WIDEN_TRACE",
+            net=net_name,
+            parameters={
+                "recommended_min_width_mm": min_width,
+                "segment_count": f.raw_data.get("segment_count"),
+                "layer": f.raw_data.get("layer"),
+            },
+            description=(
+                f"Widen power track for net '{net_name or 'power'}' to at least "
+                f"{min_width:.2f}mm to reduce IR drop."
+            ),
+        )
+
+    def _fix_diff_skew(self, f: Finding) -> ActionableFix:
+        max_skew = self._threshold(
+            f, "max_skew_threshold_mm", self.config.max_diff_pair_skew_mm
+        )
+        return ActionableFix(
+            action_type="TUNE_DIFF_PAIR_SKEW",
+            net=f.nets[0] if f.nets else None,
+            parameters={
+                "max_skew_mm": max_skew,
+                "measured_skew_mm": f.raw_data.get("skew_mm"),
+            },
+            description=(
+                "Add serpentine meandering or length-tuning loops to match differential "
+                f"pair trace lengths to within {max_skew:.2f}mm."
+            ),
+        )
+
+    def _fix_switching_loop(self, f: Finding) -> ActionableFix:
+        max_area = self._threshold(f, "max_recommended_area_mm2", 30.0)
+        return ActionableFix(
+            action_type="COMPACT_SWITCHING_LOOP",
+            net=f.nets[0] if f.nets else None,
+            parameters={
+                "max_loop_area_mm2": max_area,
+                "measured_area_mm2": f.raw_data.get("measured_area_mm2"),
+            },
+            description=(
+                "Reposition switching inductor, diode/FET, and input filter capacitors into "
+                f"a compact polygon below {max_area:.1f} mm2."
+            ),
+        )
+
+    def _fix_ground_plane(self, f: Finding) -> ActionableFix:
+        return ActionableFix(
+            action_type="EXPAND_GROUND_PLANE",
+            net="GND",
+            parameters={"unreferenced_count": f.raw_data.get("unreferenced_count")},
+            description=(
+                "Ensure a continuous copper ground pour exists directly underneath "
+                "high-speed signal tracks."
+            ),
+        )
+
+    # -- fallbacks ----------------------------------------------------------
+
+    @staticmethod
+    def _threshold(f: Finding, key: str, default: float) -> float:
+        """Prefer the threshold the rule actually applied over a global default.
+
+        Rules record what they measured against in raw_data. Reading it back
+        keeps the machine-readable fix consistent with the report text; the
+        previous hardcoded constants disagreed with both (0.50mm against a
+        configured 0.30mm, 50 mm2 against a rule limit of 30 mm2).
+        """
+        value = f.raw_data.get(key, default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _fallback_fix(self, f: Finding) -> ActionableFix | None:
+        """Best-effort action for findings from rules without a dedicated builder.
+
+        Covers vision findings and native DRC/ERC violations, whose remedy is
+        inferred from the violation text rather than from a known rule.
+        """
         rule = f.rule_id.upper()
-        cat = f.category
+        title_lower = f.title.lower()
+        desc_lower = f.description.lower()
 
-        # Decoupling Capacitor Proximity
-        if cat == FindingCategory.DECOUPLING or "DEC" in rule:
-            target_comp = f.components[1] if len(f.components) > 1 else (f.components[0] if f.components else None)
-            target_ic = f.components[0] if len(f.components) > 1 else "IC"
-            target_coord = f.coordinates[0] if f.coordinates else None
-            return ActionableFix(
-                action_type="RELOCATE_COMPONENT",
-                component=target_comp,
-                net=f.nets[0] if f.nets else None,
-                target_coordinates=target_coord,
-                parameters={"target_ic": target_ic, "max_distance_mm": 3.5},
-                description=f"Relocate capacitor {target_comp or ''} within 3.5mm of {target_ic} power pins.",
-            )
-
-        # Power Rail Trace Width
-        if cat == FindingCategory.POWER_DELIVERY or "PWR" in rule:
-            net_name = f.nets[0] if f.nets else None
-            return ActionableFix(
-                action_type="WIDEN_TRACE",
-                net=net_name,
-                parameters={"recommended_min_width_mm": 0.50},
-                description=f"Widen power track for net '{net_name or 'power'}' to at least 0.50mm to reduce IR drop.",
-            )
-
-        # Differential Pair Length Mismatch
-        if cat == FindingCategory.SIGNAL_INTEGRITY or "DIFF" in rule:
-            return ActionableFix(
-                action_type="TUNE_DIFF_PAIR_SKEW",
-                net=f.nets[0] if f.nets else None,
-                parameters={"max_skew_mm": 0.15},
-                description="Add serpentine meandering or length-tuning loops to match differential pair trace lengths.",
-            )
-
-        # DC/DC Switching Loop
-        if "DCDC" in rule or "SWITCH" in f.title.upper():
-            return ActionableFix(
-                action_type="COMPACT_SWITCHING_LOOP",
-                parameters={"max_loop_area_mm2": 50.0},
-                description="Reposition switching inductor, diode/FET, and input filter capacitors into a compact polygon.",
-            )
-
-        # Ground Plane Return Path
-        if "GND" in rule or "RETURN" in f.title.upper():
-            return ActionableFix(
-                action_type="EXPAND_GROUND_PLANE",
-                net="GND",
-                description="Ensure continuous copper ground pour exists directly underneath high-speed signal tracks.",
-            )
-
-        # Silkscreen & Pin 1
-        if cat == FindingCategory.SILKSCREEN or "SILK" in rule or "PIN 1" in f.title.upper():
+        if f.category == FindingCategory.SILKSCREEN or "SILK" in rule or "pin 1" in title_lower:
             comp = f.components[0] if f.components else None
             return ActionableFix(
                 action_type="ADD_PIN1_MARKER",
                 component=comp,
-                description=f"Add silkscreen Pin 1 dot or bevel indicator adjacent to pin 1 on component {comp or ''}.",
+                description=(
+                    "Add silkscreen Pin 1 dot or bevel indicator adjacent to pin 1 on "
+                    f"component {comp or ''}."
+                ),
             )
 
-        # DRC & ERC issues
-        if cat == FindingCategory.DRC_ERC:
-            title_lower = f.title.lower()
-            desc_lower = f.description.lower()
+        if f.category == FindingCategory.DRC_ERC:
             if "clearance" in title_lower or "clearance" in desc_lower:
                 return ActionableFix(
                     action_type="ADJUST_CLEARANCE",
                     component=f.components[0] if f.components else None,
                     net=f.nets[0] if f.nets else None,
-                    description="Reroute trace or move component pad to meet electrical clearance requirement.",
+                    description=(
+                        "Reroute trace or move component pad to meet electrical clearance "
+                        "requirement."
+                    ),
                 )
             if "short" in title_lower or "short" in desc_lower:
                 return ActionableFix(
                     action_type="REMOVE_SHORT_CIRCUIT",
                     net=f.nets[0] if f.nets else None,
-                    description="Separate colliding copper nets to eliminate direct electrical short circuit.",
+                    description=(
+                        "Separate colliding copper nets to eliminate direct electrical short "
+                        "circuit."
+                    ),
                 )
             if "unrouted" in title_lower or "unconnected" in desc_lower:
                 return ActionableFix(
                     action_type="ROUTE_NET",
                     net=f.nets[0] if f.nets else None,
-                    description=f"Complete copper trace routing for unconnected net '{f.nets[0] if f.nets else ''}'.",
+                    description=(
+                        "Complete copper trace routing for unconnected net "
+                        f"'{f.nets[0] if f.nets else ''}'."
+                    ),
                 )
 
-        # Default fallback actionable fix
         if f.recommendation:
             return ActionableFix(
                 action_type="MANUAL_REVIEW",
@@ -185,3 +285,14 @@ class FindingAggregator:
             )
 
         return None
+
+
+#: rule_id -> builder. Keyed on the rule that produced the finding so that two
+#: rules sharing a FindingCategory cannot be conflated.
+_FIX_BUILDERS: dict[str, Callable[[FindingAggregator, Finding], ActionableFix]] = {
+    "HEUR-DEC-001": FindingAggregator._fix_decoupling,
+    "HEUR-PWR-001": FindingAggregator._fix_trace_width,
+    "HEUR-DIFF-001": FindingAggregator._fix_diff_skew,
+    "HEUR-DCDC-001": FindingAggregator._fix_switching_loop,
+    "HEUR-GND-001": FindingAggregator._fix_ground_plane,
+}

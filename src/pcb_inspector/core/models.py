@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# Findings of each severity that cost roughly 63% of the remaining health
+# score. Smaller means harsher. Module level because Pydantic reinterprets
+# underscore-prefixed class attributes as private model attributes.
+_DECAY_CRITICAL = 3.0
+_DECAY_WARNING = 10.0
+_DECAY_SUGGESTION = 40.0
 
 
 class Severity(str, Enum):
@@ -128,6 +136,23 @@ class AuditSummary(BaseModel):
     duration_seconds: float = 0.0
 
     @classmethod
+    def health_score_for(cls, critical: int, warning: int, suggestion: int) -> float:
+        """Layout health score from 0 to 100, exclusive of 0 until truly hopeless.
+
+        Exponential decay rather than a linear penalty. Under the previous
+        linear scheme four CRITICAL findings clamped the score to 0, making a
+        board with four defects indistinguishable from one with a hundred and
+        erasing any signal of whether a fix round actually improved things.
+        A clean board still scores exactly 100.
+        """
+        exponent = (
+            critical / _DECAY_CRITICAL
+            + warning / _DECAY_WARNING
+            + suggestion / _DECAY_SUGGESTION
+        )
+        return round(100.0 * math.exp(-exponent), 1)
+
+    @classmethod
     def calculate(
         cls,
         findings: list[Finding],
@@ -146,9 +171,7 @@ class AuditSummary(BaseModel):
         else:
             passed = crit == 0 and warn == 0 and sugg == 0
 
-        # Layout Health Score: 0 to 100
-        penalty = (crit * 30.0) + (warn * 10.0) + (sugg * 2.0)
-        score = max(0.0, round(100.0 - penalty, 1))
+        score = cls.health_score_for(crit, warn, sugg)
 
         return cls(
             total_findings=len(findings),

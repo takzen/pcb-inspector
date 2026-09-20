@@ -7,6 +7,7 @@ from typing import Any
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.exceptions import RuleExecutionError
+from pcb_inspector.core.layers import HEURISTIC_CATEGORIES
 from pcb_inspector.core.models import Finding, FindingCategory, Severity
 from pcb_inspector.rules.base import BaseRule
 
@@ -66,6 +67,12 @@ class RuleRegistry:
             if target_cats is not None and rule.category not in target_cats:
                 continue
             if target_ids is not None and rule_id not in target_ids:
+                continue
+            if not config.enable_heuristics and rule.category in HEURISTIC_CATEGORIES:
+                logger.debug("Skipping %s: heuristics disabled in configuration.", rule_id)
+                continue
+            if not rule.is_enabled(config):
+                logger.debug("Skipping %s: disabled via custom_rules.", rule_id)
                 continue
             try:
                 findings = rule.evaluate(context, config)

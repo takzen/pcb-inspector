@@ -19,11 +19,25 @@ max_diff_pair_skew_mm: 0.10
 # Example: Strict CI failure on any WARNING or CRITICAL finding
 fail_on: "WARNING"
 
-# Example: Per-rule toggles and custom thresholds
+# Example: Per-rule toggles and custom thresholds.
+# Every rule accepts `enabled`; the per-rule keys below override the matching
+# global threshold for that rule only.
 custom_rules:
-  # Disable ground plane check for 2-layer single-sided test jig
+  # Disable the ground plane check for a 2-layer single-sided test jig
   HEUR-GND-001:
-    enabled: true
-  # Tighter limit for switching loop
+    enabled: false
+    # min_track_length_mm: 5.0        # ignore segments shorter than this
+    # min_referenced_fraction: 0.9    # share of a segment that must sit over copper
+
+  # Tighter limit for the switching loop
   HEUR-DCDC-001:
     max_loop_area_mm2: 20.0
+
+  # HEUR-PWR-001:
+  #   min_width_mm: 0.5               # overrides min_power_trace_width_mm
+
+  # HEUR-DIFF-001:
+  #   max_skew_mm: 0.05               # overrides max_diff_pair_skew_mm
+
+  # VISION-AI-001:
+  #   enabled: true                   # overrides the global enable_vision switch

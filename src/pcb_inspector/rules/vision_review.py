@@ -35,14 +35,21 @@ class VisionReviewRule(BaseRule):
     def __init__(self, client: BaseVisionClient | None = None) -> None:
         self.client = client
 
-    def evaluate(self, context: Any, config: InspectorConfig) -> list[Finding]:
-        # Only run if explicitly enabled via config/CLI
-        is_enabled = config.enable_vision
-        custom_cfg = config.custom_rules.get(self.rule_id, {})
-        if "enabled" in custom_cfg:
-            is_enabled = bool(custom_cfg["enabled"])
+    def is_enabled(self, config: InspectorConfig) -> bool:
+        """Vision additionally requires the global enable_vision switch.
 
-        if not is_enabled:
+        ``custom_rules.VISION-AI-001.enabled`` may override it in either
+        direction, matching the behaviour documented in the example config.
+        """
+        override = self.settings(config).get("enabled")
+        if override is not None:
+            return bool(override)
+        return config.enable_vision
+
+    def evaluate(self, context: Any, config: InspectorConfig) -> list[Finding]:
+        # Re-checked here because the `vision` CLI command invokes the rule
+        # directly, bypassing the registry's enablement filter.
+        if not self.is_enabled(config):
             return []
 
         # Resolve PCB path

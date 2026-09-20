@@ -100,6 +100,19 @@ def test_flawed_board_benchmark() -> None:
     assert "WIDEN_TRACE" in action_types
     assert "TUNE_DIFF_PAIR_SKEW" in action_types
 
+    # Each fix must match the rule that produced it. Dispatching on category
+    # instead of rule_id handed the ground-plane finding a diff-pair fix and
+    # the switching-loop finding a widen-trace fix.
+    fix_by_rule = {
+        f.rule_id: f.actionable_fix.action_type
+        for f in findings
+        if f.actionable_fix is not None
+    }
+    assert fix_by_rule["HEUR-GND-001"] == "EXPAND_GROUND_PLANE"
+    assert fix_by_rule["HEUR-DCDC-001"] == "COMPACT_SWITCHING_LOOP"
+    assert fix_by_rule["HEUR-DIFF-001"] == "TUNE_DIFF_PAIR_SKEW"
+    assert fix_by_rule["HEUR-PWR-001"] == "WIDEN_TRACE"
+
 
 def test_cli_golden_sample_reports(tmp_path: Path) -> None:
     """Verify end-to-end report generation (Markdown, HTML, JSON) on the golden samples."""

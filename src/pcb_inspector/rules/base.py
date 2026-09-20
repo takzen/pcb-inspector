@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, TypeVar
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import Finding, FindingCategory, Severity
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T", bool, int, float, str)
 
 
 class BaseRule(ABC):
@@ -17,6 +22,42 @@ class BaseRule(ABC):
     category: FindingCategory = FindingCategory.DRC_ERC
     default_severity: Severity = Severity.WARNING
     description: str = "Abstract base rule"
+
+    def settings(self, config: InspectorConfig) -> dict[str, Any]:
+        """Per-rule overrides from the ``custom_rules`` config block."""
+        raw = config.custom_rules.get(self.rule_id)
+        return raw if isinstance(raw, dict) else {}
+
+    def is_enabled(self, config: InspectorConfig) -> bool:
+        """Whether this rule should run.
+
+        Honours ``custom_rules.<RULE-ID>.enabled``, which the shipped example
+        config documents. Previously only the vision rule consulted it, so
+        disabling any other rule in YAML silently had no effect.
+        """
+        value = self.settings(config).get("enabled")
+        return True if value is None else bool(value)
+
+    def param(self, config: InspectorConfig, key: str, default: T) -> T:
+        """Read a per-rule threshold override, falling back to ``default``.
+
+        A value of the wrong type is reported and ignored rather than crashing
+        the audit on a typo in a hand-written YAML file.
+        """
+        value = self.settings(config).get(key)
+        if value is None:
+            return default
+        try:
+            return type(default)(value)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Ignoring invalid value %r for custom_rules.%s.%s; using %r.",
+                value,
+                self.rule_id,
+                key,
+                default,
+            )
+            return default
 
     @abstractmethod
     def evaluate(self, context: Any, config: InspectorConfig) -> list[Finding]:

@@ -6,6 +6,7 @@ from typing import Any
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import Coordinate, Finding, FindingCategory, Severity
+from pcb_inspector.kicad.pcb_model import TrackSegment, net_tokens
 from pcb_inspector.rules.base import BaseRule
 from pcb_inspector.rules.board_loader import resolve_board
 
@@ -22,21 +23,33 @@ class PowerTraceWidthRule(BaseRule):
         "IR voltage drop, parasitic trace resistance, and localized Joule heating."
     )
 
-    POWER_NET_KEYWORDS = (
-        "VCC",
-        "VDD",
-        "VBUS",
-        "VBAT",
-        "+3V3",
-        "+5V",
-        "+12V",
-        "+24V",
-        "3V3",
-        "5V",
-        "12V",
-        "VIN",
-        "VOUT",
+    #: Matched against whole tokens of a net name. "+3V3" tokenizes to {3V3},
+    #: "VDD_CORE" to {VDD, CORE}.
+    POWER_NET_KEYWORDS = frozenset(
+        {
+            "VCC",
+            "VDD",
+            "VBUS",
+            "VBAT",
+            "VIN",
+            "VOUT",
+            "VSYS",
+            "3V3",
+            "5V",
+            "12V",
+            "24V",
+            "1V8",
+            "2V5",
+        }
     )
+
+    @classmethod
+    def _is_power_net(cls, net_name: str) -> bool:
+        tokens = net_tokens(net_name)
+        if "GND" in tokens:
+            # Ground is normally poured as a zone, not routed as a track.
+            return False
+        return bool(tokens & cls.POWER_NET_KEYWORDS)
 
     def evaluate(self, context: Any, config: InspectorConfig) -> list[Finding]:
         findings: list[Finding] = []
@@ -45,51 +58,64 @@ class PowerTraceWidthRule(BaseRule):
         if board is None:
             return findings
 
-        min_width = config.min_power_trace_width_mm
+        min_width = self.param(
+            config, "min_width_mm", config.min_power_trace_width_mm
+        )
 
-        # Check track segments
-        for idx, track in enumerate(board.tracks, start=1):
-            net_upper = track.net_name.upper()
-            if not any(kw in net_upper for kw in self.POWER_NET_KEYWORDS):
+        # One finding per (net, layer), not per segment. KiCad splits a single
+        # routed trace into one segment per bend, so per-segment findings let a
+        # single undersized net emit dozens of warnings and drive the health
+        # score to zero on its own.
+        groups: dict[tuple[str, str], list[TrackSegment]] = {}
+        for track in board.tracks:
+            if not self._is_power_net(track.net_name):
                 continue
-            # Skip ground traces here as they are usually polygons/planes
-            if "GND" in net_upper:
-                continue
-
             if track.width < (min_width - 1e-4):
-                mid_x = (track.start_x + track.end_x) / 2
-                mid_y = (track.start_y + track.end_y) / 2
+                groups.setdefault((track.net_name, track.layer), []).append(track)
 
-                findings.append(
-                    Finding(
-                        id=f"PWR-WIDTH-{track.net_name}-{idx:03d}",
-                        title=f"Undersized power trace on net '{track.net_name}' ({track.width:.2f} mm)",
-                        severity=Severity.WARNING,
-                        category=FindingCategory.POWER_DELIVERY,
-                        description=(
-                            f"Track segment on power rail '{track.net_name}' ({track.layer}) has a width of "
-                            f"{track.width:.2f} mm, below the recommended minimum of {min_width:.2f} mm."
-                        ),
-                        rule_id=self.rule_id,
-                        nets=[track.net_name],
-                        coordinates=[
-                            Coordinate(x=track.start_x, y=track.start_y, layer=track.layer),
-                            Coordinate(x=track.end_x, y=track.end_y, layer=track.layer),
-                        ],
-                        rationale=(
-                            "Narrow traces on power delivery networks introduce parasitic DC resistance and "
-                            "inductive impedance, leading to voltage dips during transient load steps."
-                        ),
-                        recommendation=(
-                            f"Increase trace width on net '{track.net_name}' near ({mid_x:.1f}, {mid_y:.1f}) "
-                            f"to at least {min_width:.2f} mm (or route via copper pour polygon)."
-                        ),
-                        raw_data={
-                            "measured_width_mm": track.width,
-                            "min_width_threshold_mm": min_width,
-                            "layer": track.layer,
-                        },
-                    )
+        for (net_name, layer), segments in sorted(groups.items()):
+            narrowest = min(segments, key=lambda t: t.width)
+            total_length = sum(t.length for t in segments)
+            mid_x = (narrowest.start_x + narrowest.end_x) / 2
+            mid_y = (narrowest.start_y + narrowest.end_y) / 2
+
+            plural = "s" if len(segments) > 1 else ""
+            findings.append(
+                Finding(
+                    id=f"PWR-WIDTH-{net_name}-{layer}",
+                    title=(
+                        f"Undersized power trace on net '{net_name}' "
+                        f"({narrowest.width:.2f} mm, {len(segments)} segment{plural})"
+                    ),
+                    severity=Severity.WARNING,
+                    category=FindingCategory.POWER_DELIVERY,
+                    description=(
+                        f"{len(segments)} track segment{plural} on power rail '{net_name}' ({layer}) "
+                        f"fall below the recommended minimum width of {min_width:.2f} mm. "
+                        f"The narrowest measures {narrowest.width:.2f} mm; "
+                        f"{total_length:.1f} mm of routing is affected."
+                    ),
+                    rule_id=self.rule_id,
+                    nets=[net_name],
+                    coordinates=[
+                        Coordinate(x=t.start_x, y=t.start_y, layer=t.layer) for t in segments[:10]
+                    ],
+                    rationale=(
+                        "Narrow traces on power delivery networks introduce parasitic DC resistance and "
+                        "inductive impedance, leading to voltage dips during transient load steps."
+                    ),
+                    recommendation=(
+                        f"Increase trace width on net '{net_name}' near ({mid_x:.1f}, {mid_y:.1f}) "
+                        f"to at least {min_width:.2f} mm (or route via copper pour polygon)."
+                    ),
+                    raw_data={
+                        "measured_width_mm": narrowest.width,
+                        "min_width_threshold_mm": min_width,
+                        "layer": layer,
+                        "segment_count": len(segments),
+                        "affected_length_mm": round(total_length, 3),
+                    },
                 )
+            )
 
         return findings

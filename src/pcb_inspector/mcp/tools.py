@@ -83,7 +83,7 @@ def inspect_project_tool(
     cfg.vision_model = vision_model
 
     raw_findings = default_registry.evaluate_all(context=p, config=cfg)
-    findings = FindingAggregator().aggregate(raw_findings)
+    findings = FindingAggregator(config=cfg).aggregate(raw_findings)
 
     duration = time.perf_counter() - start_time
     layers = evaluate_layer_status(findings, cfg, categories=None)
@@ -142,7 +142,7 @@ def check_decoupling_tool(
 
     rule = DecouplingProximityRule()
     raw_findings = rule.evaluate(context=p, config=cfg)
-    findings = FindingAggregator().aggregate(raw_findings)
+    findings = FindingAggregator(config=cfg).aggregate(raw_findings)
 
     fixes = [f.actionable_fix.model_dump() for f in findings if f.actionable_fix]
     passed = len([f for f in findings if f.severity in (Severity.CRITICAL, Severity.WARNING)]) == 0
@@ -179,7 +179,7 @@ def run_drc_tool(
 
     rule = KiCadDrcErcRule()
     raw_findings = rule.evaluate(context=p, config=cfg)
-    findings = FindingAggregator().aggregate(raw_findings)
+    findings = FindingAggregator(config=cfg).aggregate(raw_findings)
 
     fixes = [f.actionable_fix.model_dump() for f in findings if f.actionable_fix]
     critical_count = len([f for f in findings if f.severity == Severity.CRITICAL])

@@ -7,6 +7,7 @@ from typing import Any
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import Coordinate, Finding, FindingCategory, Severity
+from pcb_inspector.kicad.pcb_model import normalize_net
 from pcb_inspector.rules.base import BaseRule
 from pcb_inspector.rules.board_loader import resolve_board
 
@@ -72,7 +73,12 @@ class DecouplingProximityRule(BaseRule):
                     )
                     continue
 
-                # Find nearest capacitor to this specific power pin
+                # Find nearest capacitor to this specific power pin.
+                # Net matching is normalized here exactly as in
+                # get_capacitors_on_net: comparing raw strings at this step while
+                # the candidate lookup case-folded meant a capacitor on '+3v3'
+                # was found but never measured, and the finding vanished.
+                target_net = normalize_net(net_name)
                 best_cap = None
                 best_dist = float("inf")
                 best_cap_coord = (0.0, 0.0)
@@ -80,8 +86,13 @@ class DecouplingProximityRule(BaseRule):
                 for cap in candidate_caps:
                     # Find the power pad on the capacitor
                     for c_pad in cap.pads:
-                        if c_pad.net_name == net_name:
+                        if normalize_net(c_pad.net_name) == target_net:
                             dist = math.hypot(p_pad.at_x - c_pad.at_x, p_pad.at_y - c_pad.at_y)
+                            # A capacitor on the opposite side is not at the
+                            # planar distance: its return loop also traverses
+                            # the board thickness twice, through vias.
+                            if cap.layer != fp.layer:
+                                dist = math.hypot(dist, 2.0 * board.thickness)
                             if dist < best_dist:
                                 best_dist = dist
                                 best_cap = cap
