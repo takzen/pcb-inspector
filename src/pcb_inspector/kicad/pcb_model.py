@@ -513,12 +513,26 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
             pad_at_node = find_first(pad_node, "at")
             rel_x, rel_y, _ = _parse_coords(pad_at_node)
 
-            # Global pad coordinates considering component position and rotation
+            # Global pad coordinates from the footprint's position and rotation.
+            #
+            # The rotation is applied clockwise in file coordinates. KiCad's
+            # stored orientation is counter-clockwise as seen on screen, but its
+            # Y axis points down, so that becomes a clockwise rotation of the
+            # stored numbers. Using the textbook counter-clockwise matrix put
+            # pads on the wrong side of their footprint whenever it was rotated.
+            #
+            # Verified against pcbnew's own PAD::GetPosition on KiCad 10.0.6:
+            # this matches all 633 pads of the CM5_MINIMA_3 demo exactly, where
+            # the counter-clockwise form matched 498 and erred by up to 22.9mm.
+            #
+            # No mirroring is applied for footprints on the back. KiCad already
+            # stores their pad offsets in flipped form, and the same check
+            # confirms it across that board's 25 flipped footprints.
             rad = math.radians(at_rot)
             cos_a = math.cos(rad)
             sin_a = math.sin(rad)
-            pad_x = at_x + (rel_x * cos_a - rel_y * sin_a)
-            pad_y = at_y + (rel_x * sin_a + rel_y * cos_a)
+            pad_x = at_x + (rel_x * cos_a + rel_y * sin_a)
+            pad_y = at_y + (-rel_x * sin_a + rel_y * cos_a)
 
             # Size
             size_w, size_h = 0.0, 0.0
