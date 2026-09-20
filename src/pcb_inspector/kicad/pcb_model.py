@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from pcb_inspector.core.exceptions import ProjectParsingError
+from pcb_inspector.kicad.net_classes import NetClass, NetClassSettings, load_net_classes
 from pcb_inspector.kicad.sexpr_parser import find_all, find_first, get_value, parse_sexpr
 
 logger = logging.getLogger(__name__)
@@ -241,6 +242,21 @@ class Zone(BaseModel):
         return [self.points] if len(self.points) >= 3 else []
 
 
+class LayerDef(BaseModel):
+    """One entry from the board's (layers ...) table."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ordinal: int
+    name: str
+    layer_type: str = "signal"
+    user_name: str = ""
+
+    @property
+    def is_copper(self) -> bool:
+        return self.name.endswith(".Cu")
+
+
 class PcbBoard(BaseModel):
     """Complete in-memory representation of a KiCad PCB layout."""
 
@@ -253,9 +269,47 @@ class PcbBoard(BaseModel):
     tracks: list[TrackSegment] = Field(default_factory=list)
     vias: list[Via] = Field(default_factory=list)
     zones: list[Zone] = Field(default_factory=list)
+    #: Layer table in the order the board file lists it, which is the physical
+    #: stack order. The ordinals are not: a six-layer board reads
+    #: F.Cu=0, In1.Cu=4, In2.Cu=6, In3.Cu=8, In4.Cu=10, B.Cu=2.
+    layers: list[LayerDef] = Field(default_factory=list)
+    net_classes: NetClassSettings = Field(default_factory=NetClassSettings)
 
     def get_footprint(self, refdes: str) -> Footprint | None:
         return self.footprints.get(refdes)
+
+    @property
+    def copper_layers(self) -> list[str]:
+        """Copper layer names in physical stack order, front to back."""
+        return [layer.name for layer in self.layers if layer.is_copper]
+
+    def adjacent_copper_layers(self, layer: str) -> list[str]:
+        """Copper layers immediately above and below ``layer`` in the stack.
+
+        A return current flows on the nearest reference plane, so only these
+        neighbours can serve as one. Falls back to the other side of a two-layer
+        board when the stack is unknown, which is the common case for the
+        minimal files used in tests.
+        """
+        stack = self.copper_layers
+        if layer not in stack:
+            if layer == "F.Cu":
+                return ["B.Cu"]
+            if layer == "B.Cu":
+                return ["F.Cu"]
+            return []
+
+        idx = stack.index(layer)
+        neighbours = []
+        if idx > 0:
+            neighbours.append(stack[idx - 1])
+        if idx + 1 < len(stack):
+            neighbours.append(stack[idx + 1])
+        return neighbours
+
+    def net_class_for(self, net_name: str) -> NetClass | None:
+        """Net class governing a net, or None when the project declares none."""
+        return self.net_classes.class_for(net_name)
 
     def get_tracks_by_net(self, net_name: str) -> list[TrackSegment]:
         target = normalize_net(net_name)
@@ -354,6 +408,27 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
     version = str(get_value(ver_node, 1, ""))
     gen_node = find_first(parsed, "generator")
     generator = str(get_value(gen_node, 1, ""))
+
+    # Layer stack. The list order is the physical order; the leading ordinal
+    # is an identifier, not a position.
+    layers: list[LayerDef] = []
+    layers_node = find_first(parsed, "layers")
+    if layers_node:
+        for entry in layers_node[1:]:
+            if not isinstance(entry, list) or len(entry) < 3:
+                continue
+            try:
+                ordinal = int(entry[0])
+            except (TypeError, ValueError):
+                continue
+            layers.append(
+                LayerDef(
+                    ordinal=ordinal,
+                    name=str(entry[1]),
+                    layer_type=str(entry[2]),
+                    user_name=str(entry[3]) if len(entry) > 3 else "",
+                )
+            )
 
     # Board Thickness
     thickness = 1.6
@@ -575,26 +650,50 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
                     if name == z_net_name:
                         z_net_num = num
                         break
-        z_layer = str(layer_node[1]) if layer_node and len(layer_node) > 1 else "B.Cu"
+        # A zone may span several copper layers, declared as (layers "A" "B" ...)
+        # rather than (layer "A"). Reading only the singular form left every
+        # multi-layer pour assigned to a fallback layer, which on a six-layer
+        # board hid the inner ground planes entirely.
+        z_layers: list[str] = []
+        if layer_node and len(layer_node) > 1:
+            z_layers = [str(layer_node[1])]
+        else:
+            layers_plural = find_first(z_node, "layers")
+            if layers_plural:
+                z_layers = [str(entry) for entry in layers_plural[1:] if isinstance(entry, str)]
+        if not z_layers:
+            z_layers = ["B.Cu"]
 
         # `polygon` is the zone's drawn outline; `filled_polygon` is the copper
         # KiCad actually poured, which is what a reference-plane check must
-        # measure against. A zone may hold several filled_polygon nodes (one per
-        # island, one per layer), so all of them are collected rather than just
-        # the first.
+        # measure against. On a multi-layer zone each filled_polygon carries its
+        # own (layer ...), so the poured copper is grouped by that.
         outline = _zone_points(find_first(z_node, "polygon"))
-        filled = [_zone_points(node) for node in find_all(z_node, "filled_polygon")]
-        filled = [pts for pts in filled if len(pts) >= 3]
-
-        zones.append(
-            Zone(
-                net_num=z_net_num,
-                net_name=z_net_name,
-                layer=z_layer,
-                points=outline,
-                filled_polygons=filled,
+        filled_by_layer: dict[str, list[list[tuple[float, float]]]] = {}
+        for fill_node in find_all(z_node, "filled_polygon"):
+            points = _zone_points(fill_node)
+            if len(points) < 3:
+                continue
+            fill_layer_node = find_first(fill_node, "layer")
+            fill_layer = (
+                str(fill_layer_node[1])
+                if fill_layer_node and len(fill_layer_node) > 1
+                else z_layers[0]
             )
-        )
+            filled_by_layer.setdefault(fill_layer, []).append(points)
+
+        # One Zone per copper layer keeps every downstream rule layer-aware
+        # without having to know that a single pour can cover several layers.
+        for layer_name in dict.fromkeys(z_layers + list(filled_by_layer)):
+            zones.append(
+                Zone(
+                    net_num=z_net_num,
+                    net_name=z_net_name,
+                    layer=layer_name,
+                    points=outline,
+                    filled_polygons=filled_by_layer.get(layer_name, []),
+                )
+            )
 
     return PcbBoard(
         file_path=str(path),
@@ -606,4 +705,6 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
         tracks=tracks,
         vias=vias,
         zones=zones,
+        layers=layers,
+        net_classes=load_net_classes(path, parsed),
     )

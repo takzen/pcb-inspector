@@ -42,13 +42,24 @@ class GroundPlaneIntegrityRule(BaseRule):
     _SKIP_TOKENS = frozenset({"GND", "AGND", "DGND", "VCC", "VDD"})
 
     @staticmethod
-    def _reference_layers(track_layer: str, zone_layers: set[str]) -> set[str]:
+    def _reference_layers(
+        board: PcbBoard, track_layer: str, zone_layers: set[str]
+    ) -> set[str]:
         """Layers that can act as a return reference for a track on ``track_layer``.
 
-        A zone on the track's own layer is coplanar copper, not a reference
-        plane beneath it; counting it made an F.Cu ground pour "reference" the
-        F.Cu signals routed beside it.
+        Return current follows the path of least inductance, which is the
+        nearest plane directly above or below the trace. A ground pour four
+        layers away is not that plane, and one on the trace's own layer is
+        coplanar copper rather than a reference at all.
+
+        The stack order comes from the board's layer table, read in file order:
+        the ordinals are identifiers, not positions. On a six-layer board they
+        read F.Cu=0, In1.Cu=4, In2.Cu=6, In3.Cu=8, In4.Cu=10, B.Cu=2.
         """
+        adjacent = set(board.adjacent_copper_layers(track_layer))
+        if adjacent:
+            return adjacent & zone_layers
+        # Unknown stack: fall back to any layer that is not the trace's own.
         return {layer for layer in zone_layers if layer != track_layer}
 
     def evaluate(self, context: Any, config: InspectorConfig) -> list[Finding]:
@@ -94,7 +105,7 @@ class GroundPlaneIntegrityRule(BaseRule):
             if t.length < min_length or net_tokens(t.net_name) & self._SKIP_TOKENS:
                 continue
 
-            candidates = self._reference_layers(t.layer, zone_layers)
+            candidates = self._reference_layers(board, t.layer, zone_layers)
             if not candidates:
                 unreferenced.append(t)
                 continue
