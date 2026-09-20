@@ -143,8 +143,38 @@ class Footprint(BaseModel):
         return None
 
 
+def arc_length(
+    start: tuple[float, float], mid: tuple[float, float], end: tuple[float, float]
+) -> float:
+    """Length of the circular arc through three points.
+
+    KiCad stores a curved track as start/mid/end on its circumscribed circle.
+    Degenerate (collinear) input falls back to the straight chord.
+    """
+    (sx, sy), (mx, my), (ex, ey) = start, mid, end
+
+    d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my))
+    if abs(d) < 1e-12:
+        return math.hypot(ex - sx, ey - sy)
+
+    s_sq, m_sq, e_sq = sx * sx + sy * sy, mx * mx + my * my, ex * ex + ey * ey
+    cx = (s_sq * (my - ey) + m_sq * (ey - sy) + e_sq * (sy - my)) / d
+    cy = (s_sq * (ex - mx) + m_sq * (sx - ex) + e_sq * (mx - sx)) / d
+    radius = math.hypot(sx - cx, sy - cy)
+
+    def angle(px: float, py: float) -> float:
+        return (math.atan2(py - cy, px - cx) + 2.0 * math.pi) % (2.0 * math.pi)
+
+    a_start, a_mid, a_end = angle(sx, sy), angle(mx, my), angle(ex, ey)
+    sweep = (a_end - a_start) % (2.0 * math.pi)
+    # If the midpoint does not fall inside that sweep, the arc runs the other way.
+    if (a_mid - a_start) % (2.0 * math.pi) > sweep:
+        sweep = 2.0 * math.pi - sweep
+    return radius * sweep
+
+
 class TrackSegment(BaseModel):
-    """Straight trace segment on copper layer."""
+    """Trace on a copper layer: a straight segment, or an arc when mid is set."""
 
     start_x: float
     start_y: float
@@ -154,9 +184,24 @@ class TrackSegment(BaseModel):
     layer: str
     net_num: int
     net_name: str = ""
+    #: Midpoint of a curved track. KiCad writes these as (arc ...) rather than
+    #: (segment ...); ignoring them under-measures every net that uses curved
+    #: routing, which is how length tuning on differential pairs is drawn.
+    mid_x: float | None = None
+    mid_y: float | None = None
+
+    @property
+    def is_arc(self) -> bool:
+        return self.mid_x is not None and self.mid_y is not None
 
     @property
     def length(self) -> float:
+        if self.mid_x is not None and self.mid_y is not None:
+            return arc_length(
+                (self.start_x, self.start_y),
+                (self.mid_x, self.mid_y),
+                (self.end_x, self.end_y),
+            )
         return math.hypot(self.end_x - self.start_x, self.end_y - self.start_y)
 
 
@@ -426,46 +471,53 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
             pads=pads,
         )
 
-    # Tracks
+    # Tracks. Straight runs are (segment ...); curved ones are (arc ...) with an
+    # extra midpoint. Both are copper and both must be measured — curved routing
+    # is how KiCad draws length tuning, so skipping arcs under-reports exactly
+    # the nets a skew check cares about most.
     tracks: list[TrackSegment] = []
-    for segment in find_all(parsed, "segment"):
-        start_node = find_first(segment, "start")
-        end_node = find_first(segment, "end")
-        width_node = find_first(segment, "width")
-        layer_node = find_first(segment, "layer")
-        net_node = find_first(segment, "net")
+    for tag in ("segment", "arc"):
+        for node in find_all(parsed, tag):
+            start_node = find_first(node, "start")
+            end_node = find_first(node, "end")
+            if not start_node or not end_node:
+                continue
 
-        if not start_node or not end_node:
-            continue
+            width_node = find_first(node, "width")
+            layer_node = find_first(node, "layer")
+            net_node = find_first(node, "net")
 
-        sx = _safe_float(start_node, 1, 0.0, "segment (start x)")
-        sy = _safe_float(start_node, 2, 0.0, "segment (start y)")
-        ex = _safe_float(end_node, 1, 0.0, "segment (end x)")
-        ey = _safe_float(end_node, 2, 0.0, "segment (end y)")
-        w = _safe_float(width_node, 1, 0.25, "segment (width)")
-        lay = str(layer_node[1]) if layer_node and len(layer_node) > 1 else "F.Cu"
+            mid_x: float | None = None
+            mid_y: float | None = None
+            if tag == "arc":
+                mid_node = find_first(node, "mid")
+                if mid_node:
+                    mid_x = _safe_float(mid_node, 1, 0.0, "arc (mid x)")
+                    mid_y = _safe_float(mid_node, 2, 0.0, "arc (mid y)")
 
-        net_n = 0
-        net_lbl = ""
-        if net_node and len(net_node) > 1:
-            try:
-                net_n = int(net_node[1])
-                net_lbl = nets.get(net_n, "")
-            except ValueError:
-                pass
+            net_n = 0
+            net_lbl = ""
+            if net_node and len(net_node) > 1:
+                try:
+                    net_n = int(net_node[1])
+                    net_lbl = nets.get(net_n, "")
+                except ValueError:
+                    pass
 
-        tracks.append(
-            TrackSegment(
-                start_x=sx,
-                start_y=sy,
-                end_x=ex,
-                end_y=ey,
-                width=w,
-                layer=lay,
-                net_num=net_n,
-                net_name=net_lbl,
+            tracks.append(
+                TrackSegment(
+                    start_x=_safe_float(start_node, 1, 0.0, f"{tag} (start x)"),
+                    start_y=_safe_float(start_node, 2, 0.0, f"{tag} (start y)"),
+                    end_x=_safe_float(end_node, 1, 0.0, f"{tag} (end x)"),
+                    end_y=_safe_float(end_node, 2, 0.0, f"{tag} (end y)"),
+                    width=_safe_float(width_node, 1, 0.25, f"{tag} (width)"),
+                    layer=str(layer_node[1]) if layer_node and len(layer_node) > 1 else "F.Cu",
+                    net_num=net_n,
+                    net_name=net_lbl,
+                    mid_x=mid_x,
+                    mid_y=mid_y,
+                )
             )
-        )
 
     # Vias
     vias: list[Via] = []
