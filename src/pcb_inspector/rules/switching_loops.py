@@ -10,7 +10,7 @@ from shapely.ops import unary_union
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import Coordinate, Finding, FindingCategory, Severity
-from pcb_inspector.kicad.pcb_model import Footprint, net_tokens
+from pcb_inspector.kicad.pcb_model import Footprint, Pad, net_tokens
 from pcb_inspector.rules.base import BaseRule
 from pcb_inspector.rules.board_loader import resolve_board
 
@@ -41,15 +41,27 @@ class SwitchingLoopGeometryRule(BaseRule):
         """True if the net name designates a regulator switching node."""
         return bool(net_tokens(net_name) & cls.SW_NODE_KEYWORDS)
 
-    @staticmethod
-    def _is_switch_node_topology(attached: list[Footprint]) -> bool:
-        """True if the parts on this net form a converter switching node.
+    @classmethod
+    def _declared_switch_pin(cls, pads: list[Pad]) -> bool:
+        """True if a pad on this net is declared a switching pin by the schematic.
 
-        The switching node of a buck/boost regulator always ties the converter
-        (or its FET) to the energy-storage inductor, usually with a
+        ``pinfunction`` is copied from the symbol, so a pin actually named SW or
+        LX settles the question that the net name only hints at.
+        """
+        return any(net_tokens(pad.pin_function) & cls.SW_NODE_KEYWORDS for pad in pads)
+
+    @classmethod
+    def _is_switch_node(cls, attached: list[Footprint], pads: list[Pad]) -> bool:
+        """True if this net really is a converter switching node.
+
+        A declared SW or LX pin is taken at its word. Otherwise the topology
+        must show it: the switching node of a buck/boost regulator ties the
+        converter (or its FET) to the energy-storage inductor, usually with a
         freewheeling diode. Requiring that shape rejects same-named debug and
         PHY nets, which connect an IC to passives or a connector instead.
         """
+        if cls._declared_switch_pin(pads):
+            return True
         has_inductor = any(fp.is_inductor for fp in attached)
         has_active = any(fp.is_ic or fp.is_diode for fp in attached)
         return has_inductor and has_active
@@ -74,15 +86,17 @@ class SwitchingLoopGeometryRule(BaseRule):
             sw_pads = []
             related_components = set()
             attached: list[Footprint] = []
+            pads: list[Pad] = []
             for fp, pad in board.get_pads_on_net(net_name):
                 sw_pads.append((pad.at_x, pad.at_y))
                 related_components.add(fp.refdes)
                 attached.append(fp)
+                pads.append(pad)
 
-            # A name alone is not evidence. A real regulator switching node
-            # joins the converter to its inductor (or freewheeling diode); a
-            # debug or PHY net that happens to tokenize as "SW" does not.
-            if not self._is_switch_node_topology(attached):
+            # A name alone is not evidence. Confirm from a declared SW pin, or
+            # failing that from the topology; a debug or PHY net that happens
+            # to tokenize as "SW" satisfies neither.
+            if not self._is_switch_node(attached, pads):
                 logger.debug(
                     "Net '%s' matches a switching-node name but not the topology; skipping.",
                     net_name,

@@ -352,3 +352,112 @@ def test_net_class_model_defaults_are_none() -> None:
     nc = NetClass(name="X")
     assert nc.track_width is None
     assert nc.diff_pair_gap is None
+
+
+# --------------------------------------------------------------------------
+# P2-7: pinfunction, the designer's own pin names
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("pin_function", "net", "power", "ground"),
+    [
+        # Declared supply pins, whatever the net ended up being called.
+        ("VDD", "Net-(U5-OUT)", True, False),
+        ("VDDA", "X", True, False),
+        ("AVCC", "X", True, False),
+        ("VCCIO", "X", True, False),
+        ("VBUS", "X", True, False),
+        ("3.3V", "X", True, False),
+        # Real placeholder seen on KiCad 10's CM5 demo.
+        ("+5v_(Input)", "X", True, False),
+        # Declared ground pins.
+        ("GND", "X", False, True),
+        ("VSS", "X", False, True),
+        ("AGND", "X", False, True),
+        ("VSSA", "X", False, True),
+        # Placeholders carry nothing, so the net name decides.
+        ("NC", "SIGNAL_A", False, False),
+        ("Pin_4", "SIGNAL_A", False, False),
+        ("1", "SIGNAL_A", False, False),
+        ("SHIELD", "SIGNAL_A", False, False),
+        ("", "+3V3", True, False),
+        ("", "GND", False, True),
+        ("", "Net-(J1-VCC)", True, False),
+        # A signal pin must not become power because of its net name.
+        ("SW", "SW_NODE", False, False),
+        ("SDA", "I2C_SDA", False, False),
+    ],
+)
+def test_pin_function_classification(
+    pin_function: str, net: str, power: bool, ground: bool
+) -> None:
+    from pcb_inspector.kicad.pcb_model import Pad
+
+    pad = Pad(number="1", net_name=net, pin_function=pin_function)
+    assert pad.is_power is power
+    assert pad.is_ground is ground
+
+
+def test_pin_function_is_parsed(tmp_path: Path) -> None:
+    board = _board(
+        tmp_path,
+        "b",
+        '  (net 0 "") (net 1 "Net-(U1-Pad1)")\n'
+        '  (footprint "F" (layer "F.Cu") (at 0 0 0)\n'
+        '    (property "Reference" "U1")\n'
+        '    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") '
+        '(net 1 "Net-(U1-Pad1)") (pinfunction "VDD"))\n'
+        '  )',
+    )
+    parsed = load_pcb_board(board)
+    pad = parsed.footprints["U1"].pads[0]
+
+    assert pad.pin_function == "VDD"
+    # The net name alone gives no hint; the pin function does.
+    assert pad.is_power is True
+
+
+def test_decoupling_found_via_pin_function_despite_opaque_net_name(tmp_path: Path) -> None:
+    """Auto-generated net names carry no hint, but the pin name does."""
+    from pcb_inspector.rules.decoupling import DecouplingProximityRule
+
+    board = _board(
+        tmp_path,
+        "b",
+        '  (net 0 "") (net 1 "Net-(U1-Pad7)")\n'
+        '  (footprint "F" (layer "F.Cu") (at 0 0 0)\n'
+        '    (property "Reference" "U1")\n'
+        '    (pad "7" smd rect (at 0 0) (size 1 1) (layers "F.Cu") '
+        '(net 1 "Net-(U1-Pad7)") (pinfunction "VDD"))\n'
+        '  )',
+    )
+    parsed = load_pcb_board(board)
+
+    findings = DecouplingProximityRule().evaluate(parsed, InspectorConfig())
+    assert [f.id for f in findings] == ["DEC-MISSING-U1-7"]
+
+
+def test_declared_sw_pin_confirms_switching_node(tmp_path: Path) -> None:
+    """A regulator without a discrete inductor footprint is still a regulator."""
+    from pcb_inspector.rules.switching_loops import SwitchingLoopGeometryRule
+
+    pads = "\n".join(
+        f'    (pad "{n}" smd rect (at {x} {y}) (size 1 1) (layers "F.Cu") '
+        f'(net 1 "SW") (pinfunction "{fn}"))'
+        for n, x, y, fn in (("1", 0, 0, "SW"), ("2", 60, 0, "SW"), ("3", 0, 60, "SW"))
+    )
+    board = _board(
+        tmp_path,
+        "b",
+        '  (net 0 "") (net 1 "SW")\n'
+        f'  (footprint "F" (layer "F.Cu") (at 0 0 0)\n'
+        '    (property "Reference" "U1")\n'
+        f'{pads}\n'
+        '  )',
+    )
+    parsed = load_pcb_board(board)
+
+    findings = SwitchingLoopGeometryRule().evaluate(parsed, InspectorConfig())
+    assert len(findings) == 1
+    assert findings[0].rule_id == "HEUR-DCDC-001"

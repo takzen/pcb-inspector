@@ -55,6 +55,26 @@ def net_tokens(name: str) -> set[str]:
     return {t for t in _NET_TOKEN_RE.split(normalize_net(name)) if t}
 
 
+#: Net-name fragments that suggest a supply rail. Substrings rather than whole
+#: tokens, because auto-generated names such as Net-(J1-VCC) embed them.
+_POWER_NET_FRAGMENTS = (
+    "VCC", "VDD", "VBUS", "VBAT", "VIN", "VOUT",
+    "+3V3", "+5V", "+12V", "3V3", "5V",
+    "GND", "AGND", "DGND",
+)
+
+#: Pin function names denoting ground and supply pins. KiCad copies these from
+#: the schematic symbol, so they state the designer's intent outright rather
+#: than inferring it from whatever the net ended up being called.
+_PIN_GROUND_RE = re.compile(r"^(?:A|D|P|)(?:GND|VSS)[A-Z0-9_]*$|GROUND", re.IGNORECASE)
+_PIN_POWER_RE = re.compile(
+    r"^(?:[APV]?(?:VCC|VDD|VBUS|VBAT|VIN|VOUT|VSYS|VREF)[A-Z0-9_]*"
+    r"|\+?\d+[.,]?\d*\s*[Vv][A-Za-z0-9_()+\-]*"
+    r"|\d+[Vv]\d+[A-Z0-9_]*)$",
+    re.IGNORECASE,
+)
+
+
 class Pad(BaseModel):
     """Pcb footprint pad."""
 
@@ -70,35 +90,39 @@ class Pad(BaseModel):
     layers: list[str] = Field(default_factory=list)
     net_num: int = 0
     net_name: str = ""
+    #: Pin name carried over from the schematic symbol, e.g. "VDD", "GND", "SW".
+    #: Authoritative where present and meaningful; real boards also write
+    #: placeholders like "NC", "Pin_4" or "1", which carry nothing.
+    pin_function: str = ""
 
     @property
     def is_power_or_gnd(self) -> bool:
-        n = normalize_net(self.net_name)
-        return any(
-            p in n
-            for p in (
-                "VCC",
-                "VDD",
-                "VBUS",
-                "VBAT",
-                "+3V3",
-                "+5V",
-                "+12V",
-                "3V3",
-                "5V",
-                "GND",
-                "AGND",
-                "DGND",
-            )
-        )
+        return self.is_power or self.is_ground
 
     @property
     def is_ground(self) -> bool:
+        """True for a ground pin, by declared pin function or by net name."""
+        if self.pin_function and _PIN_GROUND_RE.search(self.pin_function.strip()):
+            return True
         return "GND" in normalize_net(self.net_name)
 
     @property
     def is_power(self) -> bool:
-        return self.is_power_or_gnd and not self.is_ground
+        """True for a supply pin that is not ground.
+
+        The pin function is consulted first because it comes from the schematic
+        and survives net naming that carries no hint, such as Net-(U5-OUT).
+        The net name remains a fallback, since the field is optional and is
+        often filled with placeholders.
+        """
+        if self.is_ground:
+            return False
+
+        function = self.pin_function.strip()
+        if function and _PIN_POWER_RE.match(function):
+            return True
+
+        return any(frag in normalize_net(self.net_name) for frag in _POWER_NET_FRAGMENTS)
 
 
 class Footprint(BaseModel):
@@ -521,6 +545,12 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
             layers_node = find_first(pad_node, "layers")
             pad_layers = [str(lay) for lay in layers_node[1:]] if layers_node else []
 
+            # Pin name from the schematic symbol, when the exporter wrote one.
+            pinfunc_node = find_first(pad_node, "pinfunction")
+            pin_function = (
+                str(pinfunc_node[1]) if pinfunc_node and len(pinfunc_node) > 1 else ""
+            )
+
             pads.append(
                 Pad(
                     number=pad_num,
@@ -533,6 +563,7 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
                     layers=pad_layers,
                     net_num=net_num,
                     net_name=net_name,
+                    pin_function=pin_function,
                 )
             )
 
