@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from pcb_inspector.cli.main import app
@@ -107,3 +110,66 @@ def test_registry_evaluate_filtered(tmp_path: Path) -> None:
     heur_rules = default_registry.get_rules_by_category([FindingCategory.DECOUPLING])
     assert len(heur_rules) >= 1
     assert any(r.rule_id == "HEUR-DEC-001" for r in heur_rules)
+
+
+# --------------------------------------------------------------------------
+# P2-6: the audit commands share one implementation
+# --------------------------------------------------------------------------
+
+AUDIT_COMMANDS = ["check", "drc", "analyze", "vision"]
+
+
+@pytest.mark.parametrize("command", AUDIT_COMMANDS)
+def test_every_audit_command_offers_the_shared_options(command: str) -> None:
+    """The commands drifted apart while each carried its own copy.
+
+    `vision` in particular exited non-zero without offering --fail-on, the flag
+    that decides when it should.
+    """
+    result = runner.invoke(app, [command, "--help"])
+    assert result.exit_code == 0
+    for flag in ("--output", "--format", "--fail-on", "--config", "--watch"):
+        assert flag in result.stdout, f"{command} is missing {flag}"
+
+
+@pytest.mark.parametrize("command", AUDIT_COMMANDS)
+def test_invalid_fail_on_is_rejected(command: str, tmp_path: Path) -> None:
+    board = tmp_path / "b.kicad_pcb"
+    board.write_text("(kicad_pcb (version 20240108))", encoding="utf-8")
+
+    result = runner.invoke(app, [command, str(board), "--fail-on", "NONSENSE"])
+    assert result.exit_code == 1
+    assert "Invalid --fail-on" in result.stdout
+
+
+def test_vision_fail_on_controls_the_exit_code() -> None:
+    """The mock client reports warnings but no criticals."""
+    board = (
+        Path(__file__).parent / "golden_samples" / "clean_board" / "clean_board.kicad_pcb"
+    )
+
+    passing = runner.invoke(app, ["vision", str(board), "-m", "mock", "--fail-on", "CRITICAL"])
+    assert passing.exit_code == 0
+
+    failing = runner.invoke(app, ["vision", str(board), "-m", "mock", "--fail-on", "WARNING"])
+    assert failing.exit_code == 1
+
+
+def test_vision_runs_through_the_registry_and_records_its_layer() -> None:
+    """Going through the registry is what gives vision layer status and
+    turns a crashing rule into a finding rather than silence."""
+    board = (
+        Path(__file__).parent / "golden_samples" / "clean_board" / "clean_board.kicad_pcb"
+    )
+    out_dir = Path(tempfile.mkdtemp())
+    report = out_dir / "r"
+
+    result = runner.invoke(
+        app, ["vision", str(board), "-m", "mock", "-o", str(report), "-f", "json"]
+    )
+    assert result.exit_code == 0
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    layers = payload["metadata"]["layers"]
+    assert layers["layer3_vision"] == "executed"
+    assert layers["layer1_drc_erc"] == "disabled"

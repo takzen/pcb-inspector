@@ -22,6 +22,8 @@ if sys.platform == "win32":
             pass
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import typer
 from rich.console import Console
@@ -105,6 +107,104 @@ def _build_result(
         fail_on=threshold,
         metadata={"layers": evaluate_layer_status(findings, cfg, categories)},
     )
+
+
+# Option definitions shared by every audit command. Declaring them once keeps
+# the commands from drifting apart, which is how `vision` ended up exiting
+# non-zero without offering the --fail-on flag that decides when it should.
+_PROJECT_ARG = typer.Argument(
+    ...,
+    help="Path to KiCad project file (.kicad_pro), schematic (.kicad_sch), or PCB (.kicad_pcb)",
+    exists=True,
+    readable=True,
+)
+_OUTPUT_OPT = typer.Option(
+    None, "--output", "-o", help="File path to save the generated report"
+)
+_FORMAT_OPT = typer.Option(
+    "markdown", "--format", "-f", help="Report format: markdown, json, html, or all"
+)
+_FAIL_ON_OPT = typer.Option(
+    "CRITICAL",
+    "--fail-on",
+    help="Severity threshold causing non-zero exit code: CRITICAL, WARNING, SUGGESTION",
+)
+_CONFIG_OPT = typer.Option(
+    None, "--config", "-c", help="Path to custom configuration YAML file"
+)
+_REQUIRE_CLI_OPT = typer.Option(
+    False,
+    "--require-kicad-cli",
+    help="Fail the run if kicad-cli is missing, instead of silently skipping Layer 1",
+)
+_WATCH_OPT = typer.Option(
+    False, "--watch", "-w", help="Continuously monitor files and re-evaluate on change"
+)
+
+
+def _no_overrides(cfg: InspectorConfig) -> None:
+    """Default config hook: leave the loaded configuration as it is."""
+
+
+@dataclass(frozen=True)
+class AuditRequest:
+    """Everything one audit command varies, so the run itself can be shared."""
+
+    project_path: Path
+    #: Finding categories to evaluate; None runs every registered rule.
+    categories: set[FindingCategory] | None
+    banner: str
+    output: Path | None
+    report_format: str
+    threshold: Severity
+    config_file: Path | None
+    watch: bool
+    #: Applied after the config file is loaded, so flags win over the file.
+    overrides: Callable[[InspectorConfig], None] = _no_overrides
+
+
+def _run_audit(request: AuditRequest) -> None:
+    """Load config, evaluate, report, and set the exit code.
+
+    Raises:
+        typer.Exit: With code 1 when the run does not meet its threshold.
+    """
+
+    def run_once() -> bool:
+        start_time = time.perf_counter()
+        target = request.project_path
+        project_dir = target if target.is_dir() else target.parent
+
+        cfg = InspectorConfig.load(request.config_file, project_dir=project_dir)
+        cfg.fail_on = request.threshold
+        request.overrides(cfg)
+
+        console.print(f"[bold]{request.banner}:[/bold] [cyan]{target}[/cyan]")
+        raw_findings = default_registry.evaluate_filtered(
+            context=target, config=cfg, categories=request.categories
+        )
+        findings = FindingAggregator(config=cfg).aggregate(raw_findings)
+
+        result = _build_result(
+            project_path=target,
+            findings=findings,
+            cfg=cfg,
+            categories=request.categories,
+            duration=time.perf_counter() - start_time,
+            threshold=request.threshold,
+        )
+        return _save_and_display_result(result, request.output, request.report_format)
+
+    if request.watch:
+        console.print(
+            f"[bold cyan]Entering watch mode for {request.project_path}... "
+            f"(Ctrl+C to exit)[/bold cyan]"
+        )
+        watch_and_run(request.project_path, run_once)
+        return
+
+    if not run_once():
+        raise typer.Exit(code=1)
 
 
 def _save_and_display_result(
@@ -191,51 +291,27 @@ def rules() -> None:
 
 @app.command()
 def check(
-    project_path: Path = typer.Argument(
-        ...,
-        help="Path to KiCad project file (.kicad_pro), schematic (.kicad_sch), or PCB (.kicad_pcb)",
-        exists=True,
-        readable=True,
-    ),
-    output: Path | None = typer.Option(
-        None, "--output", "-o", help="File path to save the generated report"
-    ),
-    report_format: str = typer.Option(
-        "markdown", "--format", "-f", help="Report format: markdown, json, html, or all"
-    ),
-    fail_on: str = typer.Option(
-        "CRITICAL",
-        "--fail-on",
-        help="Severity threshold causing non-zero exit code: CRITICAL, WARNING, SUGGESTION",
-    ),
-    config_file: Path | None = typer.Option(
-        None, "--config", "-c", help="Path to custom configuration YAML file"
-    ),
+    project_path: Path = _PROJECT_ARG,
+    output: Path | None = _OUTPUT_OPT,
+    report_format: str = _FORMAT_OPT,
+    fail_on: str = _FAIL_ON_OPT,
+    config_file: Path | None = _CONFIG_OPT,
     enable_vision: bool | None = typer.Option(
-        None, "--vision/--no-vision", help="Enable or disable Layer 3 multimodal vision AI inspection"
+        None,
+        "--vision/--no-vision",
+        help="Enable or disable Layer 3 multimodal vision AI inspection",
     ),
     vision_model: str | None = typer.Option(
         None,
         "--vision-model",
         help="Vision LLM model identifier (gemini-3.8-flash, fable-5, gpt-6-astra, mock)",
     ),
-    require_kicad_cli: bool = typer.Option(
-        False,
-        "--require-kicad-cli",
-        help="Fail the run if kicad-cli is missing, instead of silently skipping Layer 1",
-    ),
-    watch: bool = typer.Option(
-        False, "--watch", "-w", help="Continuously monitor files and re-evaluate on change"
-    ),
+    require_kicad_cli: bool = _REQUIRE_CLI_OPT,
+    watch: bool = _WATCH_OPT,
 ) -> None:
     """Run comprehensive 3-layer verification pipeline on a KiCad project."""
-    threshold = _parse_severity_threshold(fail_on)
 
-    def run_evaluation() -> bool:
-        start_time = time.perf_counter()
-        project_dir = project_path if project_path.is_dir() else project_path.parent
-        cfg = InspectorConfig.load(config_file, project_dir=project_dir)
-        cfg.fail_on = threshold
+    def overrides(cfg: InspectorConfig) -> None:
         if require_kicad_cli:
             cfg.require_kicad_cli = True
         if enable_vision is not None:
@@ -243,230 +319,110 @@ def check(
         if vision_model is not None:
             cfg.vision_model = vision_model
 
-        console.print(f"[bold]Starting comprehensive inspection:[/bold] [cyan]{project_path}[/cyan]")
-        raw_findings = default_registry.evaluate_all(context=project_path, config=cfg)
-        findings = FindingAggregator(config=cfg).aggregate(raw_findings)
-
-        duration = time.perf_counter() - start_time
-        result = _build_result(
+    _run_audit(
+        AuditRequest(
             project_path=project_path,
-            findings=findings,
-            cfg=cfg,
             categories=None,
-            duration=duration,
-            threshold=threshold,
+            banner="Starting comprehensive inspection",
+            output=output,
+            report_format=report_format,
+            threshold=_parse_severity_threshold(fail_on),
+            config_file=config_file,
+            watch=watch,
+            overrides=overrides,
         )
-        return _save_and_display_result(result, output, report_format)
-
-    if watch:
-        console.print(f"[bold cyan]Entering watch mode for {project_path}... (Ctrl+C to exit)[/bold cyan]")
-        watch_and_run(project_path, run_evaluation)
-        return
-
-    passed = run_evaluation()
-    if not passed:
-        raise typer.Exit(code=1)
+    )
 
 
 @app.command()
 def drc(
-    project_path: Path = typer.Argument(
-        ...,
-        help="Path to KiCad PCB (.kicad_pcb), schematic (.kicad_sch), or project directory",
-        exists=True,
-        readable=True,
-    ),
-    output: Path | None = typer.Option(
-        None, "--output", "-o", help="File path to save the generated report"
-    ),
-    report_format: str = typer.Option(
-        "markdown", "--format", "-f", help="Report format: markdown, json, html, or all"
-    ),
-    fail_on: str = typer.Option(
-        "CRITICAL",
-        "--fail-on",
-        help="Severity threshold causing non-zero exit code: CRITICAL, WARNING, SUGGESTION",
-    ),
-    config_file: Path | None = typer.Option(
-        None, "--config", "-c", help="Path to custom configuration YAML file"
-    ),
-    require_kicad_cli: bool = typer.Option(
-        False,
-        "--require-kicad-cli",
-        help="Fail the run if kicad-cli is missing, instead of silently skipping Layer 1",
-    ),
-    watch: bool = typer.Option(
-        False, "--watch", "-w", help="Continuously monitor files and re-evaluate on change"
-    ),
+    project_path: Path = _PROJECT_ARG,
+    output: Path | None = _OUTPUT_OPT,
+    report_format: str = _FORMAT_OPT,
+    fail_on: str = _FAIL_ON_OPT,
+    config_file: Path | None = _CONFIG_OPT,
+    require_kicad_cli: bool = _REQUIRE_CLI_OPT,
+    watch: bool = _WATCH_OPT,
 ) -> None:
     """Run Layer 1 deterministic DRC/ERC verification using native kicad-cli."""
-    threshold = _parse_severity_threshold(fail_on)
 
-    def run_evaluation() -> bool:
-        start_time = time.perf_counter()
-        project_dir = project_path if project_path.is_dir() else project_path.parent
-        cfg = InspectorConfig.load(config_file, project_dir=project_dir)
-        cfg.fail_on = threshold
+    def overrides(cfg: InspectorConfig) -> None:
         if require_kicad_cli:
             cfg.require_kicad_cli = True
 
-        console.print(f"[bold]Running KiCad DRC/ERC verification:[/bold] [cyan]{project_path}[/cyan]")
-        raw_findings = default_registry.evaluate_filtered(
-            context=project_path,
-            config=cfg,
-            categories={FindingCategory.DRC_ERC},
-        )
-        findings = FindingAggregator(config=cfg).aggregate(raw_findings)
-
-        duration = time.perf_counter() - start_time
-        result = _build_result(
+    _run_audit(
+        AuditRequest(
             project_path=project_path,
-            findings=findings,
-            cfg=cfg,
             categories={FindingCategory.DRC_ERC},
-            duration=duration,
-            threshold=threshold,
+            banner="Running KiCad DRC/ERC verification",
+            output=output,
+            report_format=report_format,
+            threshold=_parse_severity_threshold(fail_on),
+            config_file=config_file,
+            watch=watch,
+            overrides=overrides,
         )
-        return _save_and_display_result(result, output, report_format)
-
-    if watch:
-        console.print(f"[bold cyan]Entering watch mode for {project_path}... (Ctrl+C to exit)[/bold cyan]")
-        watch_and_run(project_path, run_evaluation)
-        return
-
-    passed = run_evaluation()
-    if not passed:
-        raise typer.Exit(code=1)
+    )
 
 
 @app.command()
 def analyze(
-    project_path: Path = typer.Argument(
-        ...,
-        help="Path to KiCad PCB (.kicad_pcb) or project directory",
-        exists=True,
-        readable=True,
-    ),
-    output: Path | None = typer.Option(
-        None, "--output", "-o", help="File path to save the generated report"
-    ),
-    report_format: str = typer.Option(
-        "markdown", "--format", "-f", help="Report format: markdown, json, html, or all"
-    ),
-    fail_on: str = typer.Option(
-        "CRITICAL",
-        "--fail-on",
-        help="Severity threshold causing non-zero exit code: CRITICAL, WARNING, SUGGESTION",
-    ),
-    config_file: Path | None = typer.Option(
-        None, "--config", "-c", help="Path to custom configuration YAML file"
-    ),
-    watch: bool = typer.Option(
-        False, "--watch", "-w", help="Continuously monitor files and re-evaluate on change"
-    ),
+    project_path: Path = _PROJECT_ARG,
+    output: Path | None = _OUTPUT_OPT,
+    report_format: str = _FORMAT_OPT,
+    fail_on: str = _FAIL_ON_OPT,
+    config_file: Path | None = _CONFIG_OPT,
+    watch: bool = _WATCH_OPT,
 ) -> None:
     """Run Layer 2 spatial, geometric, and physical heuristics verification."""
-    threshold = _parse_severity_threshold(fail_on)
-
-    def run_evaluation() -> bool:
-        start_time = time.perf_counter()
-        project_dir = project_path if project_path.is_dir() else project_path.parent
-        cfg = InspectorConfig.load(config_file, project_dir=project_dir)
-        cfg.fail_on = threshold
-
-        console.print(f"[bold]Running spatial & physical heuristics:[/bold] [cyan]{project_path}[/cyan]")
-        raw_findings = default_registry.evaluate_filtered(
-            context=project_path,
-            config=cfg,
-            categories=HEURISTIC_CATEGORIES,
-        )
-        findings = FindingAggregator(config=cfg).aggregate(raw_findings)
-
-        duration = time.perf_counter() - start_time
-        result = _build_result(
+    _run_audit(
+        AuditRequest(
             project_path=project_path,
-            findings=findings,
-            cfg=cfg,
-            categories=HEURISTIC_CATEGORIES,
-            duration=duration,
-            threshold=threshold,
+            categories=set(HEURISTIC_CATEGORIES),
+            banner="Running spatial & physical heuristics",
+            output=output,
+            report_format=report_format,
+            threshold=_parse_severity_threshold(fail_on),
+            config_file=config_file,
+            watch=watch,
         )
-        return _save_and_display_result(result, output, report_format)
-
-    if watch:
-        console.print(f"[bold cyan]Entering watch mode for {project_path}... (Ctrl+C to exit)[/bold cyan]")
-        watch_and_run(project_path, run_evaluation)
-        return
-
-    passed = run_evaluation()
-    if not passed:
-        raise typer.Exit(code=1)
+    )
 
 
 @app.command()
 def vision(
-    project_path: Path = typer.Argument(
-        ...,
-        help="Path to KiCad PCB (.kicad_pcb) or project directory",
-        exists=True,
-        readable=True,
-    ),
-    output: Path | None = typer.Option(
-        None, "--output", "-o", help="File path to save the generated report"
-    ),
-    report_format: str = typer.Option(
-        "markdown", "--format", "-f", help="Report format: markdown, json, html, or all"
-    ),
+    project_path: Path = _PROJECT_ARG,
+    output: Path | None = _OUTPUT_OPT,
+    report_format: str = _FORMAT_OPT,
     vision_model: str = typer.Option(
         "gemini-3.8-flash",
         "--model",
         "-m",
         help="Vision model to use: gemini-3.8-flash, fable-5, gpt-6-astra, mock",
     ),
-    config_file: Path | None = typer.Option(
-        None, "--config", "-c", help="Path to custom configuration YAML file"
-    ),
-    watch: bool = typer.Option(
-        False, "--watch", "-w", help="Continuously monitor files and re-evaluate on change"
-    ),
+    fail_on: str = _FAIL_ON_OPT,
+    config_file: Path | None = _CONFIG_OPT,
+    watch: bool = _WATCH_OPT,
 ) -> None:
     """Run dedicated Layer 3 Multimodal Visual Review on a PCB layout."""
-    def run_evaluation() -> bool:
-        start_time = time.perf_counter()
-        project_dir = project_path if project_path.is_dir() else project_path.parent
-        cfg = InspectorConfig.load(config_file, project_dir=project_dir)
+
+    def overrides(cfg: InspectorConfig) -> None:
         cfg.enable_vision = True
         cfg.vision_model = vision_model
 
-        console.print(
-            f"[bold]Starting Multimodal Vision Review ([cyan]{vision_model}[/cyan]):[/bold] [cyan]{project_path}[/cyan]"
-        )
-
-        from pcb_inspector.rules.vision_review import VisionReviewRule
-
-        rule = VisionReviewRule()
-        raw_findings = rule.evaluate(context=project_path, config=cfg)
-        findings = FindingAggregator(config=cfg).aggregate(raw_findings)
-
-        duration = time.perf_counter() - start_time
-        result = _build_result(
+    _run_audit(
+        AuditRequest(
             project_path=project_path,
-            findings=findings,
-            cfg=cfg,
             categories={FindingCategory.VISION},
-            duration=duration,
-            threshold=cfg.fail_on,
+            banner=f"Starting Multimodal Vision Review ([cyan]{vision_model}[/cyan])",
+            output=output,
+            report_format=report_format,
+            threshold=_parse_severity_threshold(fail_on),
+            config_file=config_file,
+            watch=watch,
+            overrides=overrides,
         )
-        return _save_and_display_result(result, output, report_format)
-
-    if watch:
-        console.print(f"[bold cyan]Entering watch mode for {project_path}... (Ctrl+C to exit)[/bold cyan]")
-        watch_and_run(project_path, run_evaluation)
-        return
-
-    passed = run_evaluation()
-    if not passed:
-        raise typer.Exit(code=1)
+    )
 
 
 @app.command()
