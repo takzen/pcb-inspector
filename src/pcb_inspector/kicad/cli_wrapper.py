@@ -192,6 +192,7 @@ class KiCadCli:
         severity_all: bool = True,
         units: str = "mm",
         timeout: float | None = DEFAULT_TIMEOUT_SECONDS,
+        schematic_parity: bool = False,
     ) -> str:
         """Run Design Rules Check (DRC) on a PCB layout file and return JSON/text string.
 
@@ -215,6 +216,8 @@ class KiCadCli:
             cmd.extend(["--format", "json"])
         if severity_all:
             cmd.append("--severity-all")
+        if schematic_parity:
+            cmd.append("--schematic-parity")
         cmd.extend(["--units", units, "--output", str(target_output), str(p_path)])
 
         action = f"DRC on {p_path.name}"
@@ -314,7 +317,12 @@ class KiCadCli:
         """Execute DRC and parse into standard findings."""
         from pcb_inspector.kicad.report_parser import parse_drc_json
 
-        raw_json = self.run_drc(pcb_path, as_json=True)
+        # The report parser always handled a schematic_parity section, but the
+        # flag that fills it was never passed, so a board that had drifted
+        # from its schematic (16 missing footprints, 72 net conflicts on a
+        # real one) passed Layer 1 without a word.
+        schematic = Path(pcb_path).with_suffix(".kicad_sch")
+        raw_json = self.run_drc(pcb_path, as_json=True, schematic_parity=schematic.exists())
         return parse_drc_json(raw_json)
 
     def execute_erc(self, schematic_path: Path | str) -> list[Finding]:

@@ -341,3 +341,28 @@ def test_find_design_file_finds_nothing_where_there_is_nothing(tmp_path: Path) -
     assert board_loader.find_design_file(tmp_path) is None
     assert board_loader.find_design_file(notes) is None
     assert board_loader.find_design_file(object()) is None
+
+
+# --------------------------------------------------------------------------
+# Schematic parity: the report section was parsed but never requested
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("with_schematic", [True, False])
+def test_drc_checks_schematic_parity_when_there_is_a_schematic(
+    fake_cli: KiCadCli, tmp_path: Path, with_schematic: bool
+) -> None:
+    """A board that had drifted from its schematic passed Layer 1 unremarked."""
+    board = tmp_path / "b.kicad_pcb"
+    board.write_text("(kicad_pcb)", encoding="utf-8")
+    if with_schematic:
+        (tmp_path / "b.kicad_sch").write_text("(kicad_sch)", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        Path(cmd[cmd.index("--output") + 1]).write_text('{"violations": []}', encoding="utf-8")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with mock.patch("subprocess.run", side_effect=fake_run) as run:
+        fake_cli.execute_drc(board)
+
+    assert ("--schematic-parity" in run.call_args.args[0]) is with_schematic

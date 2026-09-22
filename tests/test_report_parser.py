@@ -163,3 +163,44 @@ def test_parse_erc_json_complete() -> None:
     assert "U3" in f.components
     assert "GND" in f.nets
     assert "/PowerSheet/" in f.title
+
+
+def test_schematic_parity_is_grouped_by_kind() -> None:
+    """A real board out of step with its schematic reported 153 parity entries,
+    one finding each, burying everything else. Descriptions below are KiCad 10's."""
+    net_conflicts = [
+        {
+            "type": "net_conflict",
+            "severity": "warning",
+            "description": f"Pad net (GND_PROBE) doesn't match net given by schematic (E-{i})",
+            "items": [{"description": f"Pad 2 [GND_PROBE] of C{i} on F.Cu", "pos": {"x": i, "y": 1}}],
+        }
+        for i in range(1, 26)
+    ]
+    missing = [
+        {
+            "type": "missing_footprint",
+            "severity": "warning",
+            "description": "Missing footprint AC1 (AD5242BRUZ10)",
+        },
+        {
+            "type": "missing_footprint",
+            "severity": "error",
+            "description": "Missing footprint D2 (1N4148)",
+        },
+    ]
+
+    findings = parse_drc_json({"schematic_parity": net_conflicts + missing})
+    by_id = {f.id: f for f in findings}
+
+    assert set(by_id) == {"DRC-PARITY-NET_CONFLICT", "DRC-PARITY-MISSING_FOOTPRINT"}
+    conflicts = by_id["DRC-PARITY-NET_CONFLICT"]
+    assert conflicts.title == "Schematic parity: 25 x net conflict"
+    assert conflicts.raw_data["count"] == 25
+    assert "and 5 more" in conflicts.description
+    assert "GND_PROBE" in conflicts.nets
+
+    footprints = by_id["DRC-PARITY-MISSING_FOOTPRINT"]
+    assert {"AC1", "D2"} <= set(footprints.components)
+    # The most severe entry decides the group's severity.
+    assert footprints.severity is Severity.CRITICAL

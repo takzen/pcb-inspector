@@ -13,6 +13,11 @@ from pcb_inspector.core.models import Coordinate, Finding, FindingCategory, Seve
 REFDES_RE = re.compile(r"\b([A-Z]{1,3}\d+)\b")
 NET_RE = re.compile(r"\[([^\]\n]+)\]")
 
+#: Most severe first.
+_SEVERITY_ORDER = (Severity.CRITICAL, Severity.WARNING, Severity.SUGGESTION, Severity.PASS)
+#: Parity entries listed in a grouped finding's description before "and N more".
+_PARITY_LINES_SHOWN = 20
+
 
 def map_kicad_severity(severity_str: str) -> Severity:
     """Map KiCad report severity to pcb-inspector Severity."""
@@ -159,23 +164,47 @@ def parse_drc_json(report_input: str | dict[str, Any]) -> list[Finding]:
             )
         )
 
-    # 3. Parse schematic parity issues
-    parity = data.get("schematic_parity", [])
-    for idx, p in enumerate(parity, start=1):
-        desc = p.get("description", "Schematic parity mismatch")
+    # 3. Schematic parity, one finding per kind of mismatch. A board out of
+    # step with its schematic produces an entry per pad and per field: 153 on
+    # a small real board, which buried every other finding in the report.
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for p in data.get("schematic_parity", []):
+        groups.setdefault(str(p.get("type", "parity_mismatch")), []).append(p)
+
+    for p_type, entries in groups.items():
+        lines = []
+        for e in entries:
+            desc = str(e.get("description", "Schematic parity mismatch"))
+            where = "; ".join(str(it.get("description", "")) for it in e.get("items", []))
+            lines.append(f"{desc} ({where})" if where else desc)
+        combined_text = " ".join(lines)
+        items = [it for e in entries for it in e.get("items", [])]
+        kind = p_type.replace("_", " ")
+        shown = "\n".join(f"- {line}" for line in lines[:_PARITY_LINES_SHOWN])
+        more = len(lines) - _PARITY_LINES_SHOWN
         findings.append(
             Finding(
-                id=f"DRC-PARITY-{idx:03d}",
-                title=f"DRC Parity Mismatch: {desc}",
-                severity=Severity.WARNING,
+                id=f"DRC-PARITY-{p_type.upper()}",
+                title=f"Schematic parity: {len(entries)} x {kind}",
+                severity=min(
+                    (map_kicad_severity(str(e.get("severity", "warning"))) for e in entries),
+                    key=_SEVERITY_ORDER.index,
+                ),
                 category=FindingCategory.DRC_ERC,
-                description=desc,
+                description=shown + (f"\n- ... and {more} more" if more > 0 else ""),
                 rule_id="KICAD_DRC_PARITY",
-                components=extract_refdes(desc),
-                nets=extract_nets(desc),
-                rationale="Discrepancy between schematic netlist and PCB layout.",
-                recommendation="Update PCB from schematic ('F8' in KiCad).",
-                raw_data=p,
+                components=extract_refdes(combined_text),
+                nets=extract_nets(combined_text),
+                coordinates=extract_coordinates(items)[:_PARITY_LINES_SHOWN],
+                rationale=(
+                    "The board and its schematic disagree, so at least one of them does not "
+                    "describe the circuit that will be built."
+                ),
+                recommendation=(
+                    "Decide which is the intended design. If it is the schematic, run Update PCB "
+                    "from Schematic (F8); if it is the board, bring the schematic up to date first."
+                ),
+                raw_data={"type": p_type, "count": len(entries), "entries": entries},
             )
         )
 
