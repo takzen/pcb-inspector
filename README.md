@@ -11,7 +11,7 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://github.com/takzen/pcb-inspector/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/Release-v0.1.0-blue?style=flat-square" alt="Release: v0.1.0"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-411%20passed%20%7C%2090%25-brightgreen?style=flat-square" alt="Tests: 411 passed"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-422%20passed%20%7C%2090%25-brightgreen?style=flat-square" alt="Tests: 422 passed"></a>
   <a href="https://kicad.org"><img src="https://img.shields.io/badge/KiCad-8.0%2B%20%7C%209.0%20%7C%2010-314CB6?style=flat-square&logo=kicad&logoColor=white" alt="KiCad Support"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="#-mcp-server--agentic-integration"><img src="https://img.shields.io/badge/MCP%20Server-Supported-5B5EA6?style=flat-square" alt="MCP Server"></a>
@@ -226,26 +226,33 @@ sequenceDiagram
     participant Fab as 🏭 Fabrication (JLCPCB / PCBWay)
 
     Agent->>Konnect: place_component / route_track
-    Konnect->>Project: Modifies schematic & PCB files
-    Agent->>Inspector: call tool `inspect_project(path)`
+    Konnect->>Project: Edits the board live in KiCad (IPC API, undoable)
+    Agent->>Inspector: call tool `inspect_project(live=true)`
     activate Inspector
-    Inspector->>Project: Native DRC + Heuristics + Vision Check
+    Inspector->>Project: Snapshot of the open board, then DRC + Heuristics + Vision
     Inspector-->>Agent: Returns structured JSON findings + coordinates
     deactivate Inspector
 
     alt Violations Found (e.g. Decoupling too far, DRC clearance)
-        Agent->>Konnect: Move C3 closer (< 3.5mm), reroute track
+        Agent->>Konnect: Move C3 closer (< 3.5mm), dry run first, reroute track
         Note over Agent,Inspector: Agent automatically iterates until 🟢 PASS
     else All Checks Pass (🟢 PASS)
         Agent->>Fab: Export Gerbers & send to production!
     end
 ```
 
+Konnect edits the board in the running KiCad; the file on disk changes only when someone
+saves. The audit step therefore reads the **open board** with `live=true` (or `--live` on the
+CLI), unsaved edits included, through KiCad's API. It needs `pip install 'pcb-inspector[live]'`
+and *Preferences → Plugins → Enable KiCad API* in KiCad 10. Konnect's own plans are worth
+auditing before they are applied: on a real board its `place_decoupling_caps` dry run for one
+op-amp gathered every capacitor sharing ground, scoring itself 70 → 10.
+
 ### 🛠️ Exposed MCP Tools
 
 When launched with `pcb-inspector mcp`, the server provides:
 
-- `inspect_project(project_path: str)`: Runs the complete 3-layer audit (DRC, Heuristics, Vision) and returns prioritized findings.
+- `inspect_project(project_path: str = "", live: bool = False)`: Runs the complete 3-layer audit (DRC, Heuristics, Vision) and returns prioritized findings. Every tool takes `live=true` in place of a path.
 - `check_decoupling(pcb_path: str, max_distance_mm: float = 3.5)`: Rapid spatial analysis of IC power pins and decoupling bypass capacitors.
 - `run_drc(pcb_path: str)`: Fast deterministic DRC check returning structured clearance and connectivity violations.
 - `get_actionable_fixes(project_path: str)`: Machine-readable $(X, Y)$ coordinate patches and step-by-step remediation commands for agents.
@@ -294,6 +301,8 @@ When launched with `pcb-inspector mcp`, the server provides:
 - [x] Golden Sample reference benchmark boards (`clean_board` & `flawed_board`)
 
 ### Unreleased — reliability and accuracy
+- [x] Live audits of the board open in KiCad 10 (`--live`, MCP `live=true`), so a repair loop
+  driven through Konnect sees its own unsaved edits
 - [x] Vision reads its API key from `.env` too, accepts `GOOGLE_API_KEY` as Google's own tools
   do, and stops retrying once a daily quota is spent (verified against the live Gemini API)
 - [x] Checked against a real KiCad 10 analog board: the CLI no longer crashes on ERC titles

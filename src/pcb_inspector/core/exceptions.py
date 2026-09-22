@@ -25,5 +25,9 @@ class VisionReviewError(PcbInspectorError):
     """Raised when visual multimodal analysis encounters an error or API failure."""
 
 
+class KiCadLiveError(PcbInspectorError):
+    """Raised when the board open in a running KiCad cannot be read."""
+
+
 class ConfigError(PcbInspectorError):
     """Raised when a configuration file is missing, unreadable, or invalid."""

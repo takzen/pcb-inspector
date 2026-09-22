@@ -66,6 +66,9 @@ renders/
 .env.*
 !.env.example
 
+# Local MCP client registration; it holds machine-specific paths
+.mcp.json
+
 # IDE & Editors
 .idea/
 .vscode/

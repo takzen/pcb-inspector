@@ -46,14 +46,16 @@ def create_mcp_server() -> MCPServer:
             "Run a comprehensive 3-layer audit (deterministic DRC/ERC, spatial heuristics, "
             "multimodal vision AI) on a KiCad project. Returns structured findings, layout health score (0-100), "
             "and actionable repair proposals."
+            " Pass live=true instead of a path to audit the board open in KiCad, unsaved edits included: use it after editing through KiCad's API, e.g. with Konnect, since the file on disk only changes on save."
         ),
     )
     def inspect_project(
-        project_path: str,
+        project_path: str = "",
         fail_on: str = "CRITICAL",
         enable_vision: bool = False,
         vision_model: str = "gemini-3.8-flash",
         config_path: str | None = None,
+        live: bool = False,
     ) -> dict[str, Any]:
         return inspect_project_tool(
             project_path=project_path,
@@ -61,6 +63,7 @@ def create_mcp_server() -> MCPServer:
             enable_vision=enable_vision,
             vision_model=vision_model,
             config_path=config_path,
+            live=live,
         )
 
     @server.tool(
@@ -68,17 +71,20 @@ def create_mcp_server() -> MCPServer:
         description=(
             "Rapidly verify that every IC power pin has a high-frequency bypass/decoupling capacitor "
             "placed within the maximum allowable distance to prevent parasitic trace inductance."
+            " Pass live=true instead of a path to audit the board open in KiCad, unsaved edits included: use it after editing through KiCad's API, e.g. with Konnect, since the file on disk only changes on save."
         ),
     )
     def check_decoupling(
-        pcb_path: str,
+        pcb_path: str = "",
         max_distance_mm: float = 3.5,
         config_path: str | None = None,
+        live: bool = False,
     ) -> dict[str, Any]:
         return check_decoupling_tool(
             pcb_path=pcb_path,
             max_distance_mm=max_distance_mm,
             config_path=config_path,
+            live=live,
         )
 
     @server.tool(
@@ -86,15 +92,18 @@ def create_mcp_server() -> MCPServer:
         description=(
             "Execute native KiCad Design Rule Check (DRC) and Electrical Rule Check (ERC) "
             "via kicad-cli and return parsed violations with coordinates."
+            " Pass live=true instead of a path to audit the board open in KiCad, unsaved edits included: use it after editing through KiCad's API, e.g. with Konnect, since the file on disk only changes on save."
         ),
     )
     def run_drc(
-        pcb_path: str,
+        pcb_path: str = "",
         config_path: str | None = None,
+        live: bool = False,
     ) -> dict[str, Any]:
         return run_drc_tool(
             pcb_path=pcb_path,
             config_path=config_path,
+            live=live,
         )
 
     @server.tool(
@@ -102,19 +111,22 @@ def create_mcp_server() -> MCPServer:
         description=(
             "Retrieve a prioritized list of machine-executable ActionableFix items with precise coordinates (X, Y), "
             "layer, and target component/net for autonomous AI closed-loop layout repair."
+            " Pass live=true instead of a path to audit the board open in KiCad, unsaved edits included: use it after editing through KiCad's API, e.g. with Konnect, since the file on disk only changes on save."
         ),
     )
     def get_actionable_fixes(
-        project_path: str,
+        project_path: str = "",
         enable_vision: bool = False,
         vision_model: str = "gemini-3.8-flash",
         config_path: str | None = None,
+        live: bool = False,
     ) -> list[dict[str, Any]]:
         return get_actionable_fixes_tool(
             project_path=project_path,
             enable_vision=enable_vision,
             vision_model=vision_model,
             config_path=config_path,
+            live=live,
         )
 
     # -------------------------------------------------------------------------

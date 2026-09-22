@@ -22,8 +22,9 @@ if sys.platform == "win32":
             pass
 
 import logging
+import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any
 
@@ -38,10 +39,11 @@ from pcb_inspector import __version__
 from pcb_inspector.cli.watcher import watch_and_run
 from pcb_inspector.core.aggregator import FindingAggregator
 from pcb_inspector.core.config import InspectorConfig
-from pcb_inspector.core.exceptions import ConfigError
+from pcb_inspector.core.exceptions import ConfigError, KiCadLiveError
 from pcb_inspector.core.layers import evaluate_layer_status
 from pcb_inspector.core.models import AuditResult, Finding, FindingCategory, Severity
 from pcb_inspector.kicad.cli_wrapper import KiCadCli
+from pcb_inspector.kicad.live import snapshot_open_board
 from pcb_inspector.reporters.html_reporter import HtmlReporter
 from pcb_inspector.reporters.json_reporter import JsonReporter
 from pcb_inspector.reporters.markdown_reporter import MarkdownReporter
@@ -97,7 +99,7 @@ def _configure(
 
 
 def _build_result(
-    project_path: Path,
+    project_path: str,
     findings: list[Finding],
     cfg: InspectorConfig,
     categories: set[FindingCategory] | None,
@@ -106,7 +108,7 @@ def _build_result(
 ) -> AuditResult:
     """Assemble the audit result, recording which verification layers actually ran."""
     return AuditResult.create(
-        project_path=str(project_path),
+        project_path=project_path,
         findings=findings,
         tool_version=__version__,
         duration_seconds=duration,
@@ -119,8 +121,11 @@ def _build_result(
 # the commands from drifting apart, which is how `vision` ended up exiting
 # non-zero without offering the --fail-on flag that decides when it should.
 _PROJECT_ARG = typer.Argument(
-    ...,
-    help="Path to KiCad project file (.kicad_pro), schematic (.kicad_sch), or PCB (.kicad_pcb)",
+    None,
+    help=(
+        "Path to KiCad project file (.kicad_pro), schematic (.kicad_sch), or PCB (.kicad_pcb). "
+        "Omit it with --live."
+    ),
     exists=True,
     readable=True,
 )
@@ -156,6 +161,14 @@ _REQUIRE_CLI_OPT = typer.Option(
 _WATCH_OPT = typer.Option(
     False, "--watch", "-w", help="Continuously monitor files and re-evaluate on change"
 )
+_LIVE_OPT = typer.Option(
+    False,
+    "--live",
+    help=(
+        "Audit the board open in the running KiCad, unsaved edits included, through "
+        "KiCad's API. Needs pcb-inspector[live] and the API enabled in KiCad."
+    ),
+)
 
 
 def _no_overrides(cfg: InspectorConfig) -> None:
@@ -166,7 +179,8 @@ def _no_overrides(cfg: InspectorConfig) -> None:
 class AuditRequest:
     """Everything one audit command varies, so the run itself can be shared."""
 
-    project_path: Path
+    #: None only together with ``live``.
+    project_path: Path | None
     #: Finding categories to evaluate; None runs every registered rule.
     categories: set[FindingCategory] | None
     banner: str
@@ -177,6 +191,10 @@ class AuditRequest:
     watch: bool
     #: Applied after the config file is loaded, so flags win over the file.
     overrides: Callable[[InspectorConfig], None] = _no_overrides
+    #: Audit the board open in KiCad instead of a file.
+    live: bool = False
+    #: Shown as the audited project in reports; the path itself when unset.
+    display_path: str | None = None
 
 
 def _run_audit(request: AuditRequest) -> None:
@@ -186,7 +204,17 @@ def _run_audit(request: AuditRequest) -> None:
         typer.Exit: With code 1 when the run does not meet its threshold, and
             code 2 when the target holds no KiCad design or the config is invalid.
     """
-    if find_design_file(request.project_path) is None:
+    if request.live:
+        _run_live_audit(request)
+        return
+    if request.project_path is None:
+        console.print(
+            "[bold red]Give a PROJECT_PATH, or --live to audit the board open in KiCad.[/bold red]"
+        )
+        raise typer.Exit(code=2)
+    project_path = request.project_path
+
+    if find_design_file(project_path) is None:
         # With nothing to audit every rule returns no findings, which used to
         # print PASSED with a 100/100 health score.
         console.print(
@@ -197,7 +225,7 @@ def _run_audit(request: AuditRequest) -> None:
 
     def run_once() -> bool:
         start_time = time.perf_counter()
-        target = request.project_path
+        target = project_path
         project_dir = target if target.is_dir() else target.parent
 
         try:
@@ -210,14 +238,15 @@ def _run_audit(request: AuditRequest) -> None:
         cfg.fail_on = request.threshold
         request.overrides(cfg)
 
-        console.print(f"[bold]{request.banner}:[/bold] [cyan]{escape(str(target))}[/cyan]")
+        shown = request.display_path or str(target)
+        console.print(f"[bold]{request.banner}:[/bold] [cyan]{escape(shown)}[/cyan]")
         raw_findings = default_registry.evaluate_filtered(
             context=target, config=cfg, categories=request.categories
         )
         findings = FindingAggregator(config=cfg).aggregate(raw_findings)
 
         result = _build_result(
-            project_path=target,
+            project_path=shown,
             findings=findings,
             cfg=cfg,
             categories=request.categories,
@@ -234,12 +263,41 @@ def _run_audit(request: AuditRequest) -> None:
             f"[bold cyan]Entering watch mode for {escape(str(request.project_path))}... "
             f"(Ctrl+C to exit)[/bold cyan]"
         )
-        watch_and_run(request.project_path, run_once)
+        watch_and_run(project_path, run_once)
         return
 
     if not run_once():
         raise typer.Exit(code=1)
 
+
+
+def _run_live_audit(request: AuditRequest) -> None:
+    """Audit a snapshot of the board open in KiCad, then discard the snapshot.
+
+    Edits made in the editor, by hand or by a tool such as Konnect, reach the
+    file on disk only when saved; auditing the file would miss them.
+    """
+    if request.project_path is not None or request.watch:
+        console.print(
+            "[bold red]--live audits the board open in KiCad: it takes no PROJECT_PATH "
+            "and cannot be combined with --watch.[/bold red]"
+        )
+        raise typer.Exit(code=2)
+
+    with tempfile.TemporaryDirectory(prefix="pcb-inspector-live-") as scratch:
+        try:
+            board = snapshot_open_board(Path(scratch))
+        except KiCadLiveError as err:
+            console.print(f"[bold red]Live audit failed:[/bold red] {escape(str(err))}")
+            raise typer.Exit(code=2) from None
+        _run_audit(
+            replace(
+                request,
+                project_path=board.audit_target,
+                live=False,
+                display_path=f"{board.board_path} (live)",
+            )
+        )
 
 class ReportFormat(str, Enum):
     """Report file formats accepted by --format.
@@ -373,7 +431,7 @@ def rules() -> None:
 
 @app.command()
 def check(
-    project_path: Path = _PROJECT_ARG,
+    project_path: Path | None = _PROJECT_ARG,
     output: Path | None = _OUTPUT_OPT,
     report_format: ReportFormat | None = _FORMAT_OPT,
     fail_on: str = _FAIL_ON_OPT,
@@ -390,6 +448,7 @@ def check(
     ),
     require_kicad_cli: bool = _REQUIRE_CLI_OPT,
     watch: bool = _WATCH_OPT,
+    live: bool = _LIVE_OPT,
 ) -> None:
     """Run comprehensive 3-layer verification pipeline on a KiCad project."""
 
@@ -411,6 +470,7 @@ def check(
             threshold=_parse_severity_threshold(fail_on),
             config_file=config_file,
             watch=watch,
+            live=live,
             overrides=overrides,
         )
     )
@@ -418,13 +478,14 @@ def check(
 
 @app.command()
 def drc(
-    project_path: Path = _PROJECT_ARG,
+    project_path: Path | None = _PROJECT_ARG,
     output: Path | None = _OUTPUT_OPT,
     report_format: ReportFormat | None = _FORMAT_OPT,
     fail_on: str = _FAIL_ON_OPT,
     config_file: Path | None = _CONFIG_OPT,
     require_kicad_cli: bool = _REQUIRE_CLI_OPT,
     watch: bool = _WATCH_OPT,
+    live: bool = _LIVE_OPT,
 ) -> None:
     """Run Layer 1 deterministic DRC/ERC verification using native kicad-cli."""
 
@@ -442,6 +503,7 @@ def drc(
             threshold=_parse_severity_threshold(fail_on),
             config_file=config_file,
             watch=watch,
+            live=live,
             overrides=overrides,
         )
     )
@@ -449,12 +511,13 @@ def drc(
 
 @app.command()
 def analyze(
-    project_path: Path = _PROJECT_ARG,
+    project_path: Path | None = _PROJECT_ARG,
     output: Path | None = _OUTPUT_OPT,
     report_format: ReportFormat | None = _FORMAT_OPT,
     fail_on: str = _FAIL_ON_OPT,
     config_file: Path | None = _CONFIG_OPT,
     watch: bool = _WATCH_OPT,
+    live: bool = _LIVE_OPT,
 ) -> None:
     """Run Layer 2 spatial, geometric, and physical heuristics verification."""
     _run_audit(
@@ -467,13 +530,14 @@ def analyze(
             threshold=_parse_severity_threshold(fail_on),
             config_file=config_file,
             watch=watch,
+            live=live,
         )
     )
 
 
 @app.command()
 def vision(
-    project_path: Path = _PROJECT_ARG,
+    project_path: Path | None = _PROJECT_ARG,
     output: Path | None = _OUTPUT_OPT,
     report_format: ReportFormat | None = _FORMAT_OPT,
     vision_model: str = typer.Option(
@@ -485,6 +549,7 @@ def vision(
     fail_on: str = _FAIL_ON_OPT,
     config_file: Path | None = _CONFIG_OPT,
     watch: bool = _WATCH_OPT,
+    live: bool = _LIVE_OPT,
 ) -> None:
     """Run dedicated Layer 3 Multimodal Visual Review on a PCB layout."""
 
@@ -502,6 +567,7 @@ def vision(
             threshold=_parse_severity_threshold(fail_on),
             config_file=config_file,
             watch=watch,
+            live=live,
             overrides=overrides,
         )
     )

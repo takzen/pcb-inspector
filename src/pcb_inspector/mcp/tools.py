@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import tempfile
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
 from pcb_inspector import __version__
 from pcb_inspector.core.aggregator import FindingAggregator
 from pcb_inspector.core.config import InspectorConfig
-from pcb_inspector.core.exceptions import ConfigError
+from pcb_inspector.core.exceptions import ConfigError, KiCadLiveError
 from pcb_inspector.core.layers import evaluate_layer_status, incomplete_layers
 from pcb_inspector.core.models import AuditResult, Severity
+from pcb_inspector.kicad.live import snapshot_open_board
 from pcb_inspector.rules.board_loader import find_design_file, find_pcb_file
 from pcb_inspector.rules.decoupling import DecouplingProximityRule
 from pcb_inspector.rules.kicad_drc_erc import KiCadDrcErcRule
@@ -66,12 +69,41 @@ def _nothing_to_audit(path: str, kind: str) -> dict[str, Any]:
     return {"error": f"No KiCad {kind} found at '{path}'.", "passed": False, "findings": []}
 
 
+def _resolve_target(path: str, live: bool, stack: ExitStack) -> tuple[Path, str] | dict[str, Any]:
+    """The path to audit and the name to report it under, or an error payload.
+
+    With ``live`` the board open in KiCad is snapshot into a scratch project
+    that lives as long as ``stack``. A repair loop that edits the board through
+    KiCad's API, as Konnect does, needs this: the file on disk only changes
+    when someone saves, so auditing it would never show the repairs.
+    """
+    if live:
+        scratch = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="pcb-inspector-live-")))
+        try:
+            board = snapshot_open_board(scratch)
+        except KiCadLiveError as err:
+            return {"error": f"Live audit failed: {err}", "passed": False, "findings": []}
+        return board.audit_target, f"{board.board_path} (live)"
+
+    if not path:
+        return {
+            "error": "Give a project path, or live=True to audit the board open in KiCad.",
+            "passed": False,
+            "findings": [],
+        }
+    p = Path(path)
+    if not p.exists():
+        return {"error": f"Path '{path}' does not exist.", "passed": False, "findings": []}
+    return p, str(p)
+
+
 def inspect_project_tool(
-    project_path: str,
+    project_path: str = "",
     fail_on: str = "CRITICAL",
     enable_vision: bool = False,
     vision_model: str = "gemini-3.8-flash",
     config_path: str | None = None,
+    live: bool = False,
 ) -> dict[str, Any]:
     """Run a comprehensive 3-layer design audit (DRC, heuristics, vision) on a KiCad project.
 
@@ -81,23 +113,30 @@ def inspect_project_tool(
         enable_vision: Whether to run Layer 3 multimodal vision AI inspection.
         vision_model: Vision LLM identifier (gemini-3.8-flash, fable-5, gpt-6-astra, mock).
         config_path: Optional path to custom .pcb-inspector.yaml configuration file.
+        live: Audit the board open in KiCad, unsaved edits included, instead of project_path.
 
     Returns:
         Structured audit report including pass/fail status, health score, findings, and actionable fixes.
     """
-    start_time = time.perf_counter()
-    p = Path(project_path)
-    if not p.exists():
-        return {
-            "error": f"Path '{project_path}' does not exist.",
-            "passed": False,
-            "health_score": 0.0,
-            "findings": [],
-            "actionable_fixes": [],
-        }
+    with ExitStack() as stack:
+        target = _resolve_target(project_path, live, stack)
+        if isinstance(target, dict):
+            return {**target, "health_score": 0.0, "actionable_fixes": []}
+        p, shown = target
+        return _inspect(p, shown, fail_on, enable_vision, vision_model, config_path)
 
+
+def _inspect(
+    p: Path,
+    shown: str,
+    fail_on: str,
+    enable_vision: bool,
+    vision_model: str,
+    config_path: str | None,
+) -> dict[str, Any]:
+    start_time = time.perf_counter()
     if find_design_file(p) is None:
-        return _nothing_to_audit(project_path, "board or schematic")
+        return _nothing_to_audit(shown, "board or schematic")
 
     try:
         threshold = Severity(fail_on.upper())
@@ -124,7 +163,7 @@ def inspect_project_tool(
     duration = time.perf_counter() - start_time
     layers = evaluate_layer_status(findings, cfg, categories=None)
     result = AuditResult.create(
-        project_path=str(p),
+        project_path=shown,
         findings=findings,
         tool_version=__version__,
         duration_seconds=duration,
@@ -133,7 +172,7 @@ def inspect_project_tool(
     )
 
     return {
-        "project_path": str(p),
+        "project_path": shown,
         "passed": result.summary.passed,
         "health_score": result.health_score,
         "layers": layers,
@@ -154,9 +193,10 @@ def inspect_project_tool(
 
 
 def check_decoupling_tool(
-    pcb_path: str,
+    pcb_path: str = "",
     max_distance_mm: float = 3.5,
     config_path: str | None = None,
+    live: bool = False,
 ) -> dict[str, Any]:
     """Perform rapid spatial verification of bypass/decoupling capacitors near IC power pins.
 
@@ -164,32 +204,35 @@ def check_decoupling_tool(
         pcb_path: Path to the .kicad_pcb layout file or project directory.
         max_distance_mm: Maximum allowable placement distance in millimeters.
         config_path: Optional path to custom configuration file.
+        live: Check the board open in KiCad, unsaved edits included, instead of pcb_path.
 
     Returns:
         Structured decoupling report with identified violations and actionable placement fixes.
     """
-    p = Path(pcb_path)
-    if not p.exists():
-        return {"error": f"Path '{pcb_path}' does not exist.", "passed": False, "findings": []}
-    if find_pcb_file(p) is None:
-        return _nothing_to_audit(pcb_path, "board")
+    with ExitStack() as stack:
+        target = _resolve_target(pcb_path, live, stack)
+        if isinstance(target, dict):
+            return target
+        p, shown = target
+        if find_pcb_file(p) is None:
+            return _nothing_to_audit(shown, "board")
 
-    project_dir = p if p.is_dir() else p.parent
-    loaded = _load_config(config_path, project_dir)
-    if isinstance(loaded, dict):
-        return loaded
-    cfg = loaded
-    cfg.max_decoupling_distance_mm = max_distance_mm
+        project_dir = p if p.is_dir() else p.parent
+        loaded = _load_config(config_path, project_dir)
+        if isinstance(loaded, dict):
+            return loaded
+        cfg = loaded
+        cfg.max_decoupling_distance_mm = max_distance_mm
 
-    rule = DecouplingProximityRule()
-    raw_findings = rule.evaluate(context=p, config=cfg)
-    findings = FindingAggregator(config=cfg).aggregate(raw_findings)
+        rule = DecouplingProximityRule()
+        raw_findings = rule.evaluate(context=p, config=cfg)
+        findings = FindingAggregator(config=cfg).aggregate(raw_findings)
 
     fixes = [f.actionable_fix.model_dump() for f in findings if f.actionable_fix]
     passed = len([f for f in findings if f.severity in (Severity.CRITICAL, Severity.WARNING)]) == 0
 
     return {
-        "pcb_path": str(p),
+        "pcb_path": shown,
         "passed": passed,
         "max_distance_mm": max_distance_mm,
         "violation_count": len(findings),
@@ -199,40 +242,44 @@ def check_decoupling_tool(
 
 
 def run_drc_tool(
-    pcb_path: str,
+    pcb_path: str = "",
     config_path: str | None = None,
+    live: bool = False,
 ) -> dict[str, Any]:
     """Execute native KiCad deterministic Design Rule Checking (DRC) and Electrical Rule Checking (ERC).
 
     Args:
         pcb_path: Path to the .kicad_pcb, .kicad_sch, or project directory.
         config_path: Optional path to custom configuration file.
+        live: Check the board open in KiCad, unsaved edits included, instead of pcb_path.
 
     Returns:
         Report detailing DRC/ERC violations parsed from kicad-cli output.
     """
-    p = Path(pcb_path)
-    if not p.exists():
-        return {"error": f"Path '{pcb_path}' does not exist.", "passed": False, "findings": []}
-    if find_design_file(p) is None:
-        return _nothing_to_audit(pcb_path, "board or schematic")
+    with ExitStack() as stack:
+        target = _resolve_target(pcb_path, live, stack)
+        if isinstance(target, dict):
+            return target
+        p, shown = target
+        if find_design_file(p) is None:
+            return _nothing_to_audit(shown, "board or schematic")
 
-    project_dir = p if p.is_dir() else p.parent
-    loaded = _load_config(config_path, project_dir)
-    if isinstance(loaded, dict):
-        return loaded
-    cfg = loaded
+        project_dir = p if p.is_dir() else p.parent
+        loaded = _load_config(config_path, project_dir)
+        if isinstance(loaded, dict):
+            return loaded
+        cfg = loaded
 
-    rule = KiCadDrcErcRule()
-    raw_findings = rule.evaluate(context=p, config=cfg)
-    findings = FindingAggregator(config=cfg).aggregate(raw_findings)
+        rule = KiCadDrcErcRule()
+        raw_findings = rule.evaluate(context=p, config=cfg)
+        findings = FindingAggregator(config=cfg).aggregate(raw_findings)
 
     fixes = [f.actionable_fix.model_dump() for f in findings if f.actionable_fix]
     critical_count = len([f for f in findings if f.severity == Severity.CRITICAL])
     warning_count = len([f for f in findings if f.severity == Severity.WARNING])
 
     return {
-        "path": str(p),
+        "path": shown,
         "passed": critical_count == 0,
         "critical_count": critical_count,
         "warning_count": warning_count,
@@ -243,10 +290,11 @@ def run_drc_tool(
 
 
 def get_actionable_fixes_tool(
-    project_path: str,
+    project_path: str = "",
     enable_vision: bool = False,
     vision_model: str = "gemini-3.8-flash",
     config_path: str | None = None,
+    live: bool = False,
 ) -> list[dict[str, Any]]:
     """Retrieve machine-readable actionable fixes with precise coordinates for autonomous AI agent closed-loop repairs.
 
@@ -255,6 +303,7 @@ def get_actionable_fixes_tool(
         enable_vision: Whether to include vision AI findings in repair proposals.
         vision_model: Vision LLM identifier.
         config_path: Optional path to custom configuration file.
+        live: Use the board open in KiCad, unsaved edits included, instead of project_path.
 
     Returns:
         List of ActionableFix dictionaries specifying component, target coordinates, layer, and rationale.
@@ -265,6 +314,7 @@ def get_actionable_fixes_tool(
         enable_vision=enable_vision,
         vision_model=vision_model,
         config_path=config_path,
+        live=live,
     )
     fixes = audit.get("actionable_fixes", [])
     if isinstance(fixes, list):

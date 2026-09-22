@@ -28,8 +28,14 @@ dependencies = [
 claude = [
     "anthropic>=1.7",
 ]
+# Auditing the board open in a running KiCad 10, unsaved edits included,
+# through KiCad's IPC API.
+live = [
+    "kicad-python>=0.8",
+]
 dev = [
     "anthropic>=1.7",
+    "kicad-python>=0.8",
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
     "pytest-mock>=3.14.0",

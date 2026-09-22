@@ -72,6 +72,7 @@ Runs a full 3-layer verification audit on a KiCad project.
 | `--vision-model` | N/A | `gemini-3.8-flash` | Model identifier: `gemini-3.8-flash`, `fable-5`, `gpt-6-astra`, `mock`. |
 | `--require-kicad-cli` | N/A | `false` | Fail the run when `kicad-cli` is missing instead of skipping Layer 1. |
 | `--watch` | `-w` | `false` | Continuously monitor layout files and re-run check on save. |
+| `--live` | N/A | `false` | Audit the board open in the running KiCad 10, unsaved edits included, instead of `PROJECT_PATH`. Needs `pip install 'pcb-inspector[live]'` and *Preferences → Plugins → Enable KiCad API*. Also on `drc`, `analyze` and `vision`. |
 
 ### `pcb-inspector drc [OPTIONS] PROJECT_PATH`
 Runs Layer 1 deterministic DRC/ERC verification only using native `kicad-cli`:
@@ -364,10 +365,12 @@ Add to your `claude_desktop_config.json`, `.cursor/mcp.json`, or Antigravity con
 
 | Tool | Parameters | Description |
 | :--- | :--- | :--- |
-| `inspect_project` | `project_path`, `fail_on`, `enable_vision`, `vision_model`, `config_path` | Comprehensive 3-layer audit. Returns health score, summary, and findings. |
-| `check_decoupling` | `pcb_path`, `max_distance_mm`, `config_path` | Rapid spatial verification of bypass capacitor placement near IC power pins. |
-| `run_drc` | `pcb_path`, `config_path` | Native KiCad DRC/ERC check with parsed violations and coordinates. |
-| `get_actionable_fixes` | `project_path`, `enable_vision`, `vision_model`, `config_path` | Priority array of machine-executable `ActionableFix` items with coordinates $(X, Y)$ and layers. |
+| `inspect_project` | `project_path`, `fail_on`, `enable_vision`, `vision_model`, `config_path`, `live` | Comprehensive 3-layer audit. Returns health score, summary, and findings. |
+| `check_decoupling` | `pcb_path`, `max_distance_mm`, `config_path`, `live` | Rapid spatial verification of bypass capacitor placement near IC power pins. |
+| `run_drc` | `pcb_path`, `config_path`, `live` | Native KiCad DRC/ERC check with parsed violations and coordinates. |
+| `get_actionable_fixes` | `project_path`, `enable_vision`, `vision_model`, `config_path`, `live` | Priority array of machine-executable `ActionableFix` items with coordinates $(X, Y)$ and layers. |
+
+`live=true` replaces the path: the tool audits the board open in KiCad, unsaved edits included.
 
 ### Available MCP Resources
 
@@ -378,6 +381,17 @@ Add to your `claude_desktop_config.json`, `.cursor/mcp.json`, or Antigravity con
 ### Autonomous Closed-Loop Self-Repair Pattern
 
 When paired with a layout modification agent or tool (such as `Konnect MCP`):
-1. **Agent queries fixes:** calls `get_actionable_fixes(project_path="hardware/board.kicad_pcb")`.
-2. **Agent applies edits:** moves capacitors to `suggested_coordinates` or widens tracks to `parameters.recommended_width_mm`.
-3. **Agent verifies convergence:** calls `inspect_project(...)` until `health_score` reaches 100.0% and `passed` is `true`.
+1. **Agent queries fixes:** calls `get_actionable_fixes(live=true)` on the board open in KiCad.
+2. **Agent applies edits:** moves capacitors to `suggested_coordinates` or widens tracks to `parameters.recommended_width_mm`, through Konnect's live tools, dry run first where offered.
+3. **Agent verifies convergence:** calls `inspect_project(live=true)` until `passed` is `true` and `incomplete_layers` is empty. A file-based audit would still see the board as last saved.
+
+Register both servers for Claude Code in a `.mcp.json` at the project root (paths are examples):
+
+```json
+{
+  "mcpServers": {
+    "konnect": {"command": "C:\\Users\\<you>\\Documents\\KiCad\\10.0\\3rdparty\\plugins\\com_github_mixelpixx_konnect\\bin\\konnect.exe"},
+    "pcb-inspector": {"command": "pcb-inspector", "args": ["mcp", "--transport", "stdio"]}
+  }
+}
+```
