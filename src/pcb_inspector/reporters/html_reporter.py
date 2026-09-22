@@ -84,8 +84,24 @@ class HtmlReporter(BaseReporter):
             if f.recommendation:
                 recommendation_html = f'<div class="box box-rec"><strong>🛠️ Recommendation:</strong> {html.escape(f.recommendation)}</div>'
 
+            # The Markdown report embedded snapshots; this one silently dropped
+            # them, in the one format where an image is most useful.
+            snapshot_html = ""
+            if f.visual_snapshot:
+                src = html.escape(f.visual_snapshot, quote=True)
+                snapshot_html = (
+                    f'<div class="snapshot"><img src="{src}" alt="Snapshot for '
+                    f'{html.escape(f.id, quote=True)}" loading="lazy"></div>'
+                )
+
+            search_text = " ".join(
+                [f.id, f.title, f.description, f.rule_id, *f.components, *f.nets]
+            ).lower()
+
             card = f"""
-            <div class="card finding-card" data-severity="{f.severity.value}">
+            <div class="card finding-card" data-severity="{f.severity.value}"
+                 data-category="{html.escape(f.category.value, quote=True)}"
+                 data-search="{html.escape(search_text, quote=True)}">
                 <div class="card-header">
                     <div class="header-left">
                         <span class="badge" style="background-color: {sev_color}; color: #ffffff;">{f.severity.badge_emoji} {f.severity.value}</span>
@@ -107,11 +123,18 @@ class HtmlReporter(BaseReporter):
                 {rationale_html}
                 {recommendation_html}
                 {fix_html}
+                {snapshot_html}
             </div>
             """
             cards_html.append(card)
 
         all_cards = "\n".join(cards_html) if cards_html else '<div class="empty-state">🟢 All inspection checks passed. No defects detected.</div>'
+
+        categories = sorted({f.category.value for f in result.findings})
+        category_options = "".join(
+            f'<option value="{html.escape(c, quote=True)}">{html.escape(c)}</option>'
+            for c in categories
+        )
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -272,6 +295,19 @@ body {{
 .incomplete-banner ul {{ margin: 0.5rem 0 0.5rem 1.25rem; }}
 .incomplete-banner span {{ font-size: 0.875rem; color: #d1d5db; }}
 
+.filter-input {{
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+}}
+#search {{ flex: 1; min-width: 12rem; }}
+.match-count {{ align-self: center; color: var(--text-muted); font-size: 0.8rem; }}
+.snapshot {{ margin-top: 0.75rem; }}
+.snapshot img {{ max-width: 100%; border: 1px solid var(--border); border-radius: 6px; }}
+
 .empty-state {{
     text-align: center;
     padding: 4rem 2rem;
@@ -331,11 +367,18 @@ body {{
     </div>
 
     <div class="filter-bar">
-        <button class="filter-btn active" onclick="filterSev('ALL')">All ({s.total_findings})</button>
-        <button class="filter-btn" onclick="filterSev('CRITICAL')">🔴 Critical ({s.critical_count})</button>
-        <button class="filter-btn" onclick="filterSev('WARNING')">🟠 Warning ({s.warning_count})</button>
-        <button class="filter-btn" onclick="filterSev('SUGGESTION')">🟡 Suggestion ({s.suggestion_count})</button>
-        <button class="filter-btn" onclick="filterSev('PASS')">🟢 Pass ({s.pass_count})</button>
+        <button class="filter-btn active" onclick="setSeverity('ALL', this)">All ({s.total_findings})</button>
+        <button class="filter-btn" onclick="setSeverity('CRITICAL', this)">🔴 Critical ({s.critical_count})</button>
+        <button class="filter-btn" onclick="setSeverity('WARNING', this)">🟠 Warning ({s.warning_count})</button>
+        <button class="filter-btn" onclick="setSeverity('SUGGESTION', this)">🟡 Suggestion ({s.suggestion_count})</button>
+        <button class="filter-btn" onclick="setSeverity('PASS', this)">🟢 Pass ({s.pass_count})</button>
+        <select id="category-filter" class="filter-input" onchange="applyFilters()" aria-label="Filter by category">
+            <option value="ALL">All categories</option>
+            {category_options}
+        </select>
+        <input id="search" class="filter-input" type="search" oninput="applyFilters()"
+               placeholder="Search id, net, component, text…" aria-label="Search findings">
+        <span id="match-count" class="match-count"></span>
     </div>
 
     <div id="findings-list">
@@ -344,19 +387,32 @@ body {{
 </div>
 
 <script>
-function filterSev(sev) {{
-    const cards = document.querySelectorAll('.finding-card');
-    const btns = document.querySelectorAll('.filter-btn');
-    btns.forEach(b => b.classList.remove('active'));
-    event.target.classList.add('active');
+// Filters combine: severity AND category AND text. The severity buttons pass
+// their own element rather than reading the deprecated global `event`.
+let activeSeverity = 'ALL';
 
+function setSeverity(sev, button) {{
+    activeSeverity = sev;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    button.classList.add('active');
+    applyFilters();
+}}
+
+function applyFilters() {{
+    const category = document.getElementById('category-filter').value;
+    const query = document.getElementById('search').value.trim().toLowerCase();
+    let shown = 0;
+    const cards = document.querySelectorAll('.finding-card');
     cards.forEach(card => {{
-        if (sev === 'ALL' || card.getAttribute('data-severity') === sev) {{
-            card.style.display = 'block';
-        }} else {{
-            card.style.display = 'none';
-        }}
+        const visible =
+            (activeSeverity === 'ALL' || card.dataset.severity === activeSeverity) &&
+            (category === 'ALL' || card.dataset.category === category) &&
+            (query === '' || card.dataset.search.includes(query));
+        card.style.display = visible ? 'block' : 'none';
+        if (visible) shown++;
     }});
+    document.getElementById('match-count').textContent =
+        shown === cards.length ? '' : `${{shown}} of ${{cards.length}} shown`;
 }}
 </script>
 </body>

@@ -76,4 +76,72 @@ def test_html_reporter_with_findings() -> None:
     assert "Reroute track with 45 degree bevels" in html_content
     assert "DRC-002" in html_content
     assert "RELOCATE_COMPONENT" in html_content
-    assert "filterSev" in html_content
+    # Filtering is wired, and does not lean on the deprecated global `event`.
+    assert "applyFilters" in html_content
+    assert "setSeverity('CRITICAL', this)" in html_content
+    assert "event.target" not in html_content
+
+
+def _finding(**overrides: object) -> Finding:
+    payload: dict[str, object] = {
+        "id": "F-1",
+        "title": "t",
+        "severity": Severity.WARNING,
+        "category": FindingCategory.DECOUPLING,
+        "description": "d",
+        "rule_id": "R",
+    }
+    payload.update(overrides)
+    return Finding(**payload)  # type: ignore[arg-type]
+
+
+def test_visual_snapshot_is_rendered() -> None:
+    """The Markdown report embedded snapshots; the HTML one dropped them."""
+    result = AuditResult.create(
+        project_path="b.kicad_pcb",
+        findings=[_finding(visual_snapshot="renders/u1_pin1.png")],
+    )
+    out = HtmlReporter().render(result)
+    assert '<img src="renders/u1_pin1.png"' in out
+
+
+def test_category_filter_lists_only_present_categories() -> None:
+    result = AuditResult.create(
+        project_path="b.kicad_pcb",
+        findings=[
+            _finding(id="A", category=FindingCategory.DECOUPLING),
+            _finding(id="B", category=FindingCategory.SIGNAL_INTEGRITY),
+        ],
+    )
+    out = HtmlReporter().render(result)
+    assert '<option value="DECOUPLING">' in out
+    assert '<option value="SIGNAL_INTEGRITY">' in out
+    assert '<option value="THERMAL">' not in out
+
+
+def test_search_index_carries_nets_and_components() -> None:
+    result = AuditResult.create(
+        project_path="b.kicad_pcb",
+        findings=[_finding(components=["U7"], nets=["/CM5/HDMI_PI.CK_P"])],
+    )
+    out = HtmlReporter().render(result)
+    assert 'data-search="' in out
+    assert "/cm5/hdmi_pi.ck_p" in out
+    assert "u7" in out
+
+
+def test_attribute_values_are_escaped() -> None:
+    """Finding text lands in HTML attributes; a quote must not break out."""
+    result = AuditResult.create(
+        project_path="b.kicad_pcb",
+        findings=[
+            _finding(
+                title='Evil" onmouseover="alert(1)',
+                visual_snapshot='x" onerror="alert(1)',
+            )
+        ],
+    )
+    out = HtmlReporter().render(result)
+    assert 'onmouseover="alert(1)' not in out
+    assert 'onerror="alert(1)' not in out
+    assert "&quot;" in out
