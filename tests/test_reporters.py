@@ -47,6 +47,37 @@ def test_terminal_reporter(sample_audit_result: AuditResult) -> None:
     reporter.print_result(sample_audit_result)
 
 
+def test_terminal_reporter_prints_bracketed_text_literally() -> None:
+    """kicad-cli titles ERC findings on the root sheet "ERC [/]: ...".
+
+    Rich read "[/]" as a closing tag and raised MarkupError, which aborted the
+    run before any report file was written, on a real KiCad 10 project.
+    """
+    from rich.console import Console
+
+    from pcb_inspector.core.models import Finding, FindingCategory, Severity
+
+    finding = Finding(
+        id="ERC-LIB-001",
+        title="ERC [/]: The current configuration does not include the symbol library 'X'",
+        severity=Severity.WARNING,
+        category=FindingCategory.DRC_ERC,
+        components=["IC[1]"],
+        rule_id="KICAD_ERC_[bold]",
+        description="d",
+    )
+    result = AuditResult.create(
+        project_path="boards/[wip]/board.kicad_pro", findings=[finding], tool_version="t"
+    )
+    console = Console(record=True, width=300)
+    TerminalReporter(console=console).print_result(result)
+
+    text = console.export_text()
+    assert "ERC [/]: The current configuration" in text
+    assert "boards/[wip]/board.kicad_pro" in text
+    assert "IC[1]" in text
+
+
 def test_html_reporter(sample_audit_result: AuditResult, tmp_path: Path) -> None:
     from pcb_inspector.reporters.html_reporter import HtmlReporter
 

@@ -14,6 +14,7 @@ if sys.platform == "win32":
             pass
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -41,7 +42,7 @@ class TerminalReporter:
         status_color = "bold green" if s.passed else "bold red"
         status_text = "PASSED" if s.passed else "FAILED"
         panel_content = (
-            f"Project: [cyan]{result.project_path}[/cyan]\n"
+            f"Project: [cyan]{escape(str(result.project_path))}[/cyan]\n"
             f"pcb-inspector v{result.tool_version} | Status: [{status_color}]{status_text}[/{status_color}] | Health Score: [{score_color}]{s.health_score:.0f}/100[/{score_color}]\n"
             f"Execution time: [yellow]{s.duration_seconds:.2f}s[/yellow]"
         )
@@ -50,7 +51,7 @@ class TerminalReporter:
         # An incomplete audit must never read as a clean one.
         skipped = incomplete_layers(result.metadata)
         if skipped:
-            details = "\n".join(f"  • {item}" for item in skipped)
+            details = "\n".join(f"  • {escape(item)}" for item in skipped)
             self.console.print(
                 Panel(
                     f"[bold]This audit did not cover the whole board.[/bold]\n{details}\n\n"
@@ -85,14 +86,18 @@ class TerminalReporter:
         findings_table.add_column("Components", justify="left", width=14)
         findings_table.add_column("Description", justify="left")
 
+        # Titles, components and rule IDs come from the board and from kicad-cli,
+        # so they are escaped: an ERC title such as "ERC [/]: ..." (the root sheet
+        # path) otherwise parses as a Rich closing tag and aborts the run before
+        # any report file is written.
         for f in result.findings:
             sev_style = "red" if f.severity == Severity.CRITICAL else ("yellow" if f.severity == Severity.WARNING else "white")
             comp_str = ", ".join(f.components) if f.components else "-"
             findings_table.add_row(
                 f"[{sev_style}]{f.severity.badge_emoji} {f.severity.value}[/{sev_style}]",
-                f.rule_id,
-                comp_str,
-                f.title,
+                escape(f.rule_id),
+                escape(comp_str),
+                escape(f.title),
             )
 
         self.console.print(findings_table)

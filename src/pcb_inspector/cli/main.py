@@ -30,6 +30,7 @@ from typing import Any
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.markup import escape
 from rich.table import Table
 
 from pcb_inspector import __version__
@@ -188,7 +189,8 @@ def _run_audit(request: AuditRequest) -> None:
         # With nothing to audit every rule returns no findings, which used to
         # print PASSED with a 100/100 health score.
         console.print(
-            f"[bold red]No KiCad board or schematic found at:[/bold red] {request.project_path}"
+            "[bold red]No KiCad board or schematic found at:[/bold red] "
+            f"{escape(str(request.project_path))}"
         )
         raise typer.Exit(code=2)
 
@@ -202,12 +204,12 @@ def _run_audit(request: AuditRequest) -> None:
         except ConfigError as err:
             # Exit 2, a usage error, distinct from exit 1 for a failed audit: a
             # broken config means the board was never checked at all.
-            console.print(f"[bold red]Configuration error:[/bold red] {err}")
+            console.print(f"[bold red]Configuration error:[/bold red] {escape(str(err))}")
             raise typer.Exit(code=2) from None
         cfg.fail_on = request.threshold
         request.overrides(cfg)
 
-        console.print(f"[bold]{request.banner}:[/bold] [cyan]{target}[/cyan]")
+        console.print(f"[bold]{request.banner}:[/bold] [cyan]{escape(str(target))}[/cyan]")
         raw_findings = default_registry.evaluate_filtered(
             context=target, config=cfg, categories=request.categories
         )
@@ -228,7 +230,7 @@ def _run_audit(request: AuditRequest) -> None:
 
     if request.watch:
         console.print(
-            f"[bold cyan]Entering watch mode for {request.project_path}... "
+            f"[bold cyan]Entering watch mode for {escape(str(request.project_path))}... "
             f"(Ctrl+C to exit)[/bold cyan]"
         )
         watch_and_run(request.project_path, run_once)
@@ -310,7 +312,7 @@ def _save_and_display_result(
             path = output if single else output.with_suffix(suffix)
             path.parent.mkdir(parents=True, exist_ok=True)
             reporter().write_to_file(result, path)
-            console.print(f"Saved {name.upper() if name != 'markdown' else 'Markdown'} report to: [green]{path}[/green]")
+            console.print(f"Saved {name.upper() if name != 'markdown' else 'Markdown'} report to: [green]{escape(str(path))}[/green]")
 
     return result.summary.passed
 
@@ -321,7 +323,7 @@ def _parse_severity_threshold(fail_on: str) -> Severity:
         return Severity(fail_on.upper())
     except ValueError:
         console.print(
-            f"[bold red]Invalid --fail-on value '{fail_on}'. Choose CRITICAL, WARNING, or SUGGESTION.[/bold red]"
+            f"[bold red]Invalid --fail-on value '{escape(fail_on)}'. Choose CRITICAL, WARNING, or SUGGESTION.[/bold red]"
         )
         raise typer.Exit(code=1) from None
 
@@ -332,13 +334,13 @@ def version() -> None:
     console.print(f"[bold cyan]pcb-inspector[/bold cyan] version: [green]v{__version__}[/green]")
     kicad_path = KiCadCli.find_executable()
     if kicad_path:
-        console.print(f"KiCad CLI: [green]{kicad_path}[/green]")
+        console.print(f"KiCad CLI: [green]{escape(str(kicad_path))}[/green]")
         try:
             cli = KiCadCli(kicad_path)
             ver = cli.get_version()
-            console.print(f"KiCad Version: [cyan]{ver}[/cyan]")
+            console.print(f"KiCad Version: [cyan]{escape(str(ver))}[/cyan]")
         except Exception as err:
-            console.print(f"[yellow]Could not query KiCad version: {err}[/yellow]")
+            console.print(f"[yellow]Could not query KiCad version: {escape(str(err))}[/yellow]")
     else:
         console.print("[yellow]KiCad CLI: Not detected in PATH or default paths.[/yellow]")
 
@@ -518,7 +520,7 @@ def mcp(
 
     if transport not in ("stdio", "sse", "streamable-http"):
         console.print(
-            f"[bold red]Invalid transport '{transport}'. Choose 'stdio', 'sse', or 'streamable-http'.[/bold red]"
+            f"[bold red]Invalid transport '{escape(transport)}'. Choose 'stdio', 'sse', or 'streamable-http'.[/bold red]"
         )
         raise typer.Exit(code=1)
 
