@@ -245,3 +245,42 @@ def test_schematic_only_directory_is_audited(tmp_path: Path) -> None:
     result = runner.invoke(app, ["analyze", str(tmp_path)])
     assert "No KiCad board or schematic found" not in result.stdout
     assert result.exit_code == 0
+
+
+def test_console_entry_point_reads_dotenv_without_overriding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key kept in .env reaches the providers; one already exported wins."""
+    import importlib
+
+    # The package re-exports the function main, which shadows the module name.
+    cli_main = importlib.import_module("pcb_inspector.cli.main")
+
+    (tmp_path / ".env").write_text(
+        "GOOGLE_API_KEY=from-dotenv\nOPENAI_API_KEY=from-dotenv\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_main, "app", lambda: None)
+
+    import os
+    from unittest import mock
+
+    # load_dotenv writes os.environ directly; restore it whole afterwards.
+    with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "exported"}):
+        cli_main.main()
+
+        assert os.environ["GOOGLE_API_KEY"] == "from-dotenv"
+        assert os.environ["OPENAI_API_KEY"] == "exported"
+    assert "GOOGLE_API_KEY" not in os.environ
+
+
+def test_app_itself_never_reads_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests invoke the app directly; a developer's real key must not leak in."""
+    import os
+
+    (tmp_path / ".env").write_text("GOOGLE_API_KEY=real-key\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    runner.invoke(app, ["rules"])
+
+    assert "GOOGLE_API_KEY" not in os.environ

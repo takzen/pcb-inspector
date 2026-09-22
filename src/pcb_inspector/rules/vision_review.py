@@ -130,26 +130,30 @@ class VisionReviewRule(BaseRule):
         if isinstance(client, MockVisionClient):
             return client
 
-        env_var = config.vision_api_key_env or client.api_key_env
-        api_key = os.environ.get(env_var) if env_var else None
+        if config.vision_api_key_env:
+            env_label = config.vision_api_key_env
+            api_key = os.environ.get(config.vision_api_key_env)
+        else:
+            env_label = client.api_key_env_label()
+            api_key = client.api_key_from_env()
 
         # The Anthropic SDK also accepts an auth token or an `ant auth login`
         # profile, so an unset variable does not prove there are no credentials.
         if not api_key and not isinstance(client, ClaudeVisionClient):
             return Finding(
                 id="VIS-NO-API-KEY",
-                title=f"Vision API Key Missing ({env_var})",
+                title=f"Vision API Key Missing ({env_label})",
                 severity=Severity.WARNING,
                 category=FindingCategory.VISION,
                 description=(
                     f"Visual inspection was requested with model '{model_name}', but the required "
-                    f"environment variable '{env_var}' is not configured."
+                    f"environment variable {env_label} is not configured."
                 ),
                 rule_id=self.rule_id,
                 rationale="Multimodal vision inspection requires access to an external vision AI provider.",
                 recommendation=(
-                    f"Export your API key before running inspection, e.g.: "
-                    f"export {env_var}=your_key_here (or set vision_model to 'mock' for offline testing)."
+                    f"Set {env_label} in the environment or in a .env file in the directory "
+                    f"pcb-inspector runs from (or set vision_model to 'mock' for offline testing)."
                 ),
             )
 

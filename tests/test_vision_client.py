@@ -152,13 +152,31 @@ def test_mock_client_still_accepts_svg(tmp_path: Path) -> None:
 
 def test_gemini_client_missing_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="GEMINI_API_KEY is not set"):
+    with pytest.raises(ValueError, match="set GOOGLE_API_KEY or GEMINI_API_KEY"):
         GeminiVisionClient(api_key="").analyze([_png(tmp_path)])
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({"GEMINI_API_KEY": "gemini"}, "gemini"),
+        # Google's own name for the key; it used to be ignored.
+        ({"GOOGLE_API_KEY": "google"}, "google"),
+        # Google's documented precedence when both are set.
+        ({"GEMINI_API_KEY": "gemini", "GOOGLE_API_KEY": "google"}, "google"),
+    ],
+)
+def test_gemini_key_variables(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], expected: str
+) -> None:
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert GeminiVisionClient().api_key == expected
 
 
 def test_openai_client_missing_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="OPENAI_API_KEY is not set"):
+    with pytest.raises(ValueError, match="set OPENAI_API_KEY"):
         OpenAIVisionClient(api_key="").analyze([_png(tmp_path)])
 
 
@@ -260,6 +278,50 @@ def test_retries_give_up_after_max_attempts(tmp_path: Path) -> None:
         with pytest.raises(VisionReviewError, match=r"\(503\)"):
             client.analyze([_png(tmp_path)])
     assert urlopen.call_count == client.max_attempts
+
+
+def _quota_error(quota_id: str) -> urllib.error.HTTPError:
+    """A 429 as Gemini's free tier returns it, trimmed to the fields that matter."""
+    body = {
+        "error": {
+            "code": 429,
+            "message": "You exceeded your current quota, please check your plan and billing details.",
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": [{"quotaId": quota_id, "quotaValue": "20"}],
+                },
+                {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "30s"},
+            ],
+        }
+    }
+    return urllib.error.HTTPError(
+        "https://x", 429, "err", {}, io.BytesIO(json.dumps(body).encode())  # type: ignore[arg-type]
+    )
+
+
+def test_daily_quota_is_not_retried(tmp_path: Path) -> None:
+    """Retrying a spent daily quota only spends more of the next attempts."""
+    client = GeminiVisionClient(api_key="k")
+    client.retry_delays = (0.0, 0.0)
+    error = _quota_error("GenerateRequestsPerDayPerProjectPerModel-FreeTier")
+    with patch("urllib.request.urlopen", side_effect=[error]) as urlopen:
+        with pytest.raises(VisionReviewError, match="quota exhausted"):
+            client.analyze([_png(tmp_path)])
+    assert urlopen.call_count == 1
+
+
+def test_per_minute_limit_is_still_retried(tmp_path: Path) -> None:
+    client = GeminiVisionClient(api_key="k")
+    client.retry_delays = (0.0, 0.0)
+    responses = [
+        _quota_error("GenerateRequestsPerMinutePerProjectPerModel-FreeTier"),
+        _http_response(GEMINI_OK),
+    ]
+    with patch("urllib.request.urlopen", side_effect=responses) as urlopen:
+        assert client.analyze([_png(tmp_path)])[0].id == "VIS-GEM-001"
+    assert urlopen.call_count == 2
 
 
 # --------------------------------------------------------------------------

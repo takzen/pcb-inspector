@@ -137,6 +137,37 @@ def test_one_side_failing_keeps_the_other_sides_findings(tmp_path: Path) -> None
 # --------------------------------------------------------------------------
 
 
+def test_gemini_model_accepts_google_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GOOGLE_API_KEY, the name Google's own tooling uses, was reported missing."""
+    pcb_file = tmp_path / "board.kicad_pcb"
+    pcb_file.write_text(SAMPLE_PCB, encoding="utf-8")
+    monkeypatch.setenv("GOOGLE_API_KEY", "k")
+
+    with patch("urllib.request.urlopen") as urlopen, patch.object(
+        KiCadCli, "find_executable", return_value=None
+    ):
+        findings = VisionReviewRule().evaluate(
+            pcb_file, InspectorConfig(enable_vision=True, vision_model="gemini-3.8-flash")
+        )
+
+    urlopen.assert_not_called()
+    assert "VIS-NO-API-KEY" not in [f.id for f in findings]
+
+
+def test_missing_gemini_key_names_both_variables(tmp_path: Path) -> None:
+    pcb_file = tmp_path / "board.kicad_pcb"
+    pcb_file.write_text(SAMPLE_PCB, encoding="utf-8")
+
+    findings = VisionReviewRule().evaluate(
+        pcb_file, InspectorConfig(enable_vision=True, vision_model="gemini-3.8-flash")
+    )
+
+    assert [f.id for f in findings] == ["VIS-NO-API-KEY"]
+    assert "GOOGLE_API_KEY or GEMINI_API_KEY" in findings[0].title
+
+
 def test_openai_model_uses_openai_key_variable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

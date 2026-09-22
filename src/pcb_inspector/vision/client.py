@@ -84,8 +84,9 @@ def _encode_image_base64(path: Path) -> tuple[str, str]:
 class BaseVisionClient(ABC):
     """Abstract interface for multimodal vision model clients."""
 
-    #: Standard environment variable holding this provider's API key.
-    api_key_env: ClassVar[str | None] = None
+    #: Environment variables that may hold this provider's API key, in the
+    #: provider's own order of precedence.
+    api_key_envs: ClassVar[tuple[str, ...]] = ()
     #: Image formats this provider will accept.
     accepted_mime_types: ClassVar[frozenset[str]] = PROVIDER_IMAGE_MIME_TYPES
     #: Attempts per request for transient failures (429, 5xx, network errors).
@@ -108,6 +109,16 @@ class BaseVisionClient(ABC):
     @property
     def provider(self) -> str:
         return type(self).__name__.replace("VisionClient", "")
+
+    @classmethod
+    def api_key_from_env(cls) -> str | None:
+        """The first key set among ``api_key_envs``, or None."""
+        return next((os.environ[n] for n in cls.api_key_envs if os.environ.get(n)), None)
+
+    @classmethod
+    def api_key_env_label(cls) -> str:
+        """The key variables as a user would be told to set them."""
+        return " or ".join(cls.api_key_envs)
 
     def check_images(self, image_paths: list[Path]) -> None:
         """Refuse images this provider cannot accept, before any request is made.
@@ -207,10 +218,15 @@ class BaseVisionClient(ABC):
                     return decoded
             except urllib.error.HTTPError as err:
                 body = err.read().decode("utf-8", errors="replace")
-                retryable = err.code == 429 or err.code >= 500
+                retryable = self._retryable(err.code, body)
                 if retryable and not last:
                     self._backoff(attempt, err.headers.get("Retry-After") if err.headers else None)
                     continue
+                if err.code == 429 and not retryable:
+                    raise VisionReviewError(
+                        f"{self.provider} quota exhausted; retrying will not help until it "
+                        f"resets. Try another model or a paid key. ({err.code}): {body[:500]}"
+                    ) from err
                 raise VisionReviewError(
                     f"{self.provider} API request failed ({err.code}): {body[:500]}"
                 ) from err
@@ -221,6 +237,10 @@ class BaseVisionClient(ABC):
                 raise VisionReviewError(f"{self.provider} API unreachable: {err.reason}") from err
 
         raise VisionReviewError(f"{self.provider} API request failed after retries")
+
+    def _retryable(self, status: int, body: str) -> bool:
+        """Whether a failed request is worth repeating: rate limits and server errors."""
+        return status == 429 or status >= 500
 
     def _backoff(self, attempt: int, retry_after: str | None) -> None:
         delay = self.retry_delays[min(attempt, len(self.retry_delays) - 1)] if self.retry_delays else 0.0
@@ -237,7 +257,8 @@ class BaseVisionClient(ABC):
 class GeminiVisionClient(BaseVisionClient):
     """Gemini, over the Generative Language REST API."""
 
-    api_key_env = "GEMINI_API_KEY"
+    #: Google accepts both names and, when both are set, uses GOOGLE_API_KEY.
+    api_key_envs = ("GOOGLE_API_KEY", "GEMINI_API_KEY")
 
     def __init__(
         self,
@@ -245,8 +266,18 @@ class GeminiVisionClient(BaseVisionClient):
         api_key: str | None = None,
         cache_dir: Path | str | None = None,
     ) -> None:
-        key = api_key or os.environ.get(self.api_key_env or "", "")
-        super().__init__(model_name=model_name, api_key=key, cache_dir=cache_dir)
+        super().__init__(
+            model_name=model_name, api_key=api_key or self.api_key_from_env(), cache_dir=cache_dir
+        )
+
+    def _retryable(self, status: int, body: str) -> bool:
+        # A 429 is either a per-minute limit, worth waiting out, or a daily
+        # quota, where each retry is one more refused request. The free tier
+        # allows 20 requests a day per model, and retrying two views three
+        # times each spent six of them on a single failed run.
+        if status == 429 and "PerDay" in body:
+            return False
+        return super()._retryable(status, body)
 
     @property
     def generation(self) -> int:
@@ -257,7 +288,7 @@ class GeminiVisionClient(BaseVisionClient):
     def _execute_request(self, prompt: str, image_paths: list[Path]) -> str:
         if not self.api_key:
             raise ValueError(
-                "GEMINI_API_KEY is not set. Please set the GEMINI_API_KEY environment variable."
+                f"No Gemini API key: set {self.api_key_env_label()} in the environment or .env."
             )
 
         parts: list[dict[str, Any]] = [{"text": prompt}]
@@ -298,7 +329,7 @@ class GeminiVisionClient(BaseVisionClient):
 class OpenAIVisionClient(BaseVisionClient):
     """OpenAI chat completions with image input."""
 
-    api_key_env = "OPENAI_API_KEY"
+    api_key_envs = ("OPENAI_API_KEY",)
 
     def __init__(
         self,
@@ -306,13 +337,14 @@ class OpenAIVisionClient(BaseVisionClient):
         api_key: str | None = None,
         cache_dir: Path | str | None = None,
     ) -> None:
-        key = api_key or os.environ.get(self.api_key_env or "", "")
-        super().__init__(model_name=model_name, api_key=key, cache_dir=cache_dir)
+        super().__init__(
+            model_name=model_name, api_key=api_key or self.api_key_from_env(), cache_dir=cache_dir
+        )
 
     def _execute_request(self, prompt: str, image_paths: list[Path]) -> str:
         if not self.api_key:
             raise ValueError(
-                "OPENAI_API_KEY is not set. Please set the OPENAI_API_KEY environment variable."
+                f"No OpenAI API key: set {self.api_key_env_label()} in the environment or .env."
             )
 
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
@@ -350,7 +382,7 @@ class ClaudeVisionClient(BaseVisionClient):
     retries for rate limits and server errors.
     """
 
-    api_key_env = "ANTHROPIC_API_KEY"
+    api_key_envs = ("ANTHROPIC_API_KEY",)
 
     #: Project identifiers mapped to Anthropic model IDs. A name that already
     #: starts with "claude-" is passed through unchanged.

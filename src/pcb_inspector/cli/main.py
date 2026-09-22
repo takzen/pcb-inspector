@@ -28,6 +28,7 @@ from enum import Enum
 from typing import Any
 
 import typer
+from dotenv import find_dotenv, load_dotenv
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.markup import escape
@@ -536,7 +537,17 @@ def mcp(
 
 
 def main() -> None:
-    """Entrypoint function."""
+    """Console entry point.
+
+    Reads a .env file from the working directory or the nearest parent that
+    has one, so an API key kept there reaches the vision providers. Variables
+    already set in the environment win. This happens here and not in the
+    Typer callback so that tests, which invoke ``app`` directly, never pick up
+    a developer's real keys and make paid requests.
+    """
+    env_file = find_dotenv(usecwd=True)
+    if env_file:
+        load_dotenv(env_file, override=False)
     app()
 
 

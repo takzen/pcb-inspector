@@ -12,6 +12,21 @@ from pcb_inspector.core.models import (
     Severity,
 )
 
+#: Every variable a vision provider reads its key from.
+_PROVIDER_KEY_VARS = ("GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_provider_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep a developer's real API keys out of the tests.
+
+    With a key exported, or loaded from .env, a test that means "no key" would
+    otherwise reach a real provider and make a paid request. Tests that need a
+    key set a fake one themselves.
+    """
+    for name in _PROVIDER_KEY_VARS:
+        monkeypatch.delenv(name, raising=False)
+
 
 @pytest.fixture
 def sample_coordinate() -> Coordinate:

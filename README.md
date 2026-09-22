@@ -11,7 +11,7 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://github.com/takzen/pcb-inspector/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/Release-v0.1.0-blue?style=flat-square" alt="Release: v0.1.0"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-402%20passed%20%7C%2090%25-brightgreen?style=flat-square" alt="Tests: 402 passed"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-411%20passed%20%7C%2090%25-brightgreen?style=flat-square" alt="Tests: 411 passed"></a>
   <a href="https://kicad.org"><img src="https://img.shields.io/badge/KiCad-8.0%2B%20%7C%209.0%20%7C%2010-314CB6?style=flat-square&logo=kicad&logoColor=white" alt="KiCad Support"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="#-mcp-server--agentic-integration"><img src="https://img.shields.io/badge/MCP%20Server-Supported-5B5EA6?style=flat-square" alt="MCP Server"></a>
@@ -166,8 +166,9 @@ capacity, and star-routing checks.
 ### 3. Multimodal Visual Review
 Each side of the board is raytraced to PNG with `kicad-cli pcb render` and reviewed in its own
 request by Gemini, OpenAI or Claude (Fable/Opus). The API key is read from the chosen provider's
-own variable — `GEMINI_API_KEY`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` — and use `--vision-model mock`
-to run offline. Hosted models need the `kicad-cli` render; the tool refuses to send them anything
+own variable — `GOOGLE_API_KEY` or `GEMINI_API_KEY`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` —
+exported or kept in a `.env` file in the directory you run from; use `--vision-model mock` to
+run offline. A spent daily quota is reported at once rather than retried. Hosted models need the `kicad-cli` render; the tool refuses to send them anything
 else rather than fail at the provider. Vision models catch layout anti-patterns that resist
 formulation into rigid CAD rules:
 - **Component placement:** Clustering balance, awkward orientations, and assembly congestion.
@@ -293,6 +294,8 @@ When launched with `pcb-inspector mcp`, the server provides:
 - [x] Golden Sample reference benchmark boards (`clean_board` & `flawed_board`)
 
 ### Unreleased — reliability and accuracy
+- [x] Vision reads its API key from `.env` too, accepts `GOOGLE_API_KEY` as Google's own tools
+  do, and stops retrying once a daily quota is spent (verified against the live Gemini API)
 - [x] Checked against a real KiCad 10 analog board: the CLI no longer crashes on ERC titles
   such as `ERC [/]:`, supply rails are recognised the same way by every rule (`+3.3V` was
   missed, `BIAS_1.65V` was taken for one), and DRC checks schematic parity
