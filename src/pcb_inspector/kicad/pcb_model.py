@@ -385,6 +385,70 @@ def _safe_float(node: list[Any] | None, index: int, default: float, context: str
         return default
 
 
+class _NetTable:
+    """Resolves (net ...) references in both board file formats.
+
+    Up to KiCad 9 a board declares a top-level table, (net 5 "GND"), and every
+    pad, track, via and zone refers to it by number: (net 5). KiCad 10 dropped
+    the table and names the net inline everywhere: (net "GND"). Reading only
+    the numeric form, a board saved by KiCad 10 parsed with no nets at all, so
+    four of the five Layer 2 rules saw nothing and reported nothing.
+
+    The tokenizer strips quotes, so (net "1") and (net 1) look identical. The
+    format is therefore decided by whether the file has a net table, which also
+    reads a net that happens to be named with digits correctly.
+    """
+
+    def __init__(self, parsed: list[Any]) -> None:
+        self.by_num: dict[int, str] = {}
+        self.by_name: dict[str, int] = {}
+        for node in find_all(parsed, "net"):
+            if len(node) < 2:
+                continue
+            try:
+                num = int(node[1])
+            except (TypeError, ValueError):
+                continue
+            name = str(node[2]) if len(node) > 2 else ""
+            self.by_num[num] = name
+            self.by_name.setdefault(name, num)
+        #: KiCad 10 format: references carry the name itself.
+        self.inline_names = not self.by_num
+
+    def resolve(self, node: list[Any] | None) -> tuple[int, str]:
+        """Return (number, name) for a (net ...) node; (0, "") when absent."""
+        if not node or len(node) < 2:
+            return (0, "")
+        raw = node[1]
+        if self.inline_names:
+            return self._register(str(raw))
+        try:
+            num = int(raw)
+        except (TypeError, ValueError):
+            # A name in a numbered file: resolve it against the table.
+            return self._register(str(raw))
+        name = self.by_num.get(num)
+        if name is None:
+            # Number missing from the table; some writers repeat the name inline.
+            inline = str(node[2]) if len(node) > 2 else ""
+            if inline:
+                self.by_num[num] = inline
+                self.by_name.setdefault(inline, num)
+            return (num, inline)
+        return (num, name)
+
+    def _register(self, name: str) -> tuple[int, str]:
+        """Number a net known only by name, so every net is still enumerable."""
+        if not name:
+            return (0, "")
+        num = self.by_name.get(name)
+        if num is None:
+            num = max(self.by_num, default=0) + 1
+            self.by_num[num] = name
+            self.by_name[name] = num
+        return (num, name)
+
+
 def _zone_points(poly_node: list[Any] | None) -> list[tuple[float, float]]:
     """Extract the (xy ...) vertex list from a zone polygon node."""
     if not poly_node:
@@ -465,15 +529,8 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
             except (ValueError, TypeError):
                 thickness = 1.6
 
-    # Nets
-    nets: dict[int, str] = {}
-    for n in find_all(parsed, "net"):
-        try:
-            num = int(n[1])
-            name = str(n[2]) if len(n) > 2 else ""
-            nets[num] = name
-        except (ValueError, IndexError):
-            continue
+    # Nets: a top-level table up to KiCad 9, inline names from KiCad 10.
+    net_table = _NetTable(parsed)
 
     # Footprints
     footprints: dict[str, Footprint] = {}
@@ -545,15 +602,7 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
                     pass
 
             # Net
-            net_num = 0
-            net_name = ""
-            net_node = find_first(pad_node, "net")
-            if net_node and len(net_node) >= 2:
-                try:
-                    net_num = int(net_node[1])
-                    net_name = nets.get(net_num, str(net_node[2]) if len(net_node) > 2 else "")
-                except (ValueError, IndexError):
-                    pass
+            net_num, net_name = net_table.resolve(find_first(pad_node, "net"))
 
             # Layers
             layers_node = find_first(pad_node, "layers")
@@ -615,14 +664,7 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
                     mid_x = _safe_float(mid_node, 1, 0.0, "arc (mid x)")
                     mid_y = _safe_float(mid_node, 2, 0.0, "arc (mid y)")
 
-            net_n = 0
-            net_lbl = ""
-            if net_node and len(net_node) > 1:
-                try:
-                    net_n = int(net_node[1])
-                    net_lbl = nets.get(net_n, "")
-                except ValueError:
-                    pass
+            net_n, net_lbl = net_table.resolve(net_node)
 
             tracks.append(
                 TrackSegment(
@@ -656,14 +698,7 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
         if layer_node and len(layer_node) >= 3:
             v_layers = (str(layer_node[1]), str(layer_node[2]))
 
-        v_net_n = 0
-        v_net_lbl = ""
-        if net_node and len(net_node) > 1:
-            try:
-                v_net_n = int(net_node[1])
-                v_net_lbl = nets.get(v_net_n, "")
-            except ValueError:
-                pass
+        v_net_n, v_net_lbl = net_table.resolve(net_node)
 
         vias.append(
             Via(
@@ -682,19 +717,12 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
     for z_node in find_all(parsed, "zone"):
         net_node = find_first(z_node, "net")
         layer_node = find_first(z_node, "layer")
-        z_net_num = 0
-        z_net_name = ""
-        if net_node and len(net_node) > 1:
-            raw_net = net_node[1]
-            try:
-                z_net_num = int(raw_net)
-                z_net_name = nets.get(z_net_num, "")
-            except ValueError:
-                z_net_name = str(raw_net)
-                for num, name in nets.items():
-                    if name == z_net_name:
-                        z_net_num = num
-                        break
+        z_net_num, z_net_name = net_table.resolve(net_node)
+        if not z_net_name:
+            # Older zones also carry the name separately as (net_name "GND").
+            name_node = find_first(z_node, "net_name")
+            if name_node and len(name_node) > 1:
+                z_net_num, z_net_name = net_table._register(str(name_node[1]))
         # A zone may span several copper layers, declared as (layers "A" "B" ...)
         # rather than (layer "A"). Reading only the singular form left every
         # multi-layer pour assigned to a fallback layer, which on a six-layer
@@ -745,7 +773,7 @@ def load_pcb_board(file_path: Path | str) -> PcbBoard:
         version=version,
         generator=generator,
         thickness=thickness,
-        nets=nets,
+        nets=net_table.by_num,
         footprints=footprints,
         tracks=tracks,
         vias=vias,
