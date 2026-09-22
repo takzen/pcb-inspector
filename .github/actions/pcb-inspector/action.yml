@@ -56,17 +56,22 @@ runs:
     # installed here and the run is made to fail if it is still missing.
     - name: Install KiCad CLI
       shell: bash
+      # kicad-cli ships in the kicad package; there is no separate one. KiCad 10
+      # opens boards from every earlier version, while KiCad 9 cannot open a
+      # board saved by KiCad 10. Recommends would pull in 3 GB of libraries.
       run: |
         set -euo pipefail
-        sudo add-apt-repository --yes ppa:kicad/kicad-9.0-releases
+        sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
         sudo apt-get update
-        sudo apt-get install --yes --no-install-recommends kicad-cli
+        sudo apt-get install --yes --no-install-recommends kicad
         kicad-cli version
 
+    # From the action's own checkout. "." is the calling repository, which in a
+    # hardware project holds the boards, not this tool.
     - name: Install pcb-inspector
       shell: bash
       run: |
-        uv pip install --system .
+        uv pip install --system "${{ github.action_path }}/../../.."
 
     - name: Run pcb-inspector check
       id: inspector

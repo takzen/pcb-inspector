@@ -268,7 +268,8 @@ Finding categories: `DRC_ERC`, `DECOUPLING`, `POWER_DELIVERY`, `SIGNAL_INTEGRITY
 
 You can easily integrate `pcb-inspector` into GitHub Actions or GitLab CI to fail pull requests that introduce layout regressions.
 
-The simplest route is the bundled action, `uses: ./.github/actions/pcb-inspector`, which installs
+The simplest route is the bundled action,
+`uses: takzen/pcb-inspector/.github/actions/pcb-inspector@main`, which installs KiCad 10's
 `kicad-cli` and runs with `--require-kicad-cli`. The workflow below does the same by hand.
 
 Exit codes: `0` passed, `1` findings at or above `--fail-on`, `2` usage or configuration error
@@ -302,14 +303,16 @@ jobs:
       # Layer 1 needs kicad-cli. Without it the audit reports DRC/ERC as not
       # run, and with --require-kicad-cli the job fails instead of passing on
       # heuristics alone.
+      # kicad-cli ships in the kicad package. KiCad 10 opens boards saved by
+      # any earlier version; KiCad 9 cannot open a board saved by KiCad 10.
       - name: Install KiCad CLI
         run: |
-          sudo add-apt-repository --yes ppa:kicad/kicad-9.0-releases
+          sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends kicad-cli
+          sudo apt-get install --yes --no-install-recommends kicad
 
       - name: Install pcb-inspector
-        run: uv pip install --system .
+        run: uv pip install --system "git+https://github.com/takzen/pcb-inspector.git"
 
       - name: Run PCB Inspector
         run: |
