@@ -214,7 +214,7 @@ YAML, not a mapping, or holds a value of the wrong type stops the run with exit 
 | `require_kicad_cli` | `bool` | `false` | Report a missing `kicad-cli` as `CRITICAL` instead of `WARNING`. Recommended in CI. Also `--require-kicad-cli`. |
 | `max_decoupling_distance_mm` | `float` | `3.5` | Largest distance (mm) from an IC supply pin to its nearest bypass capacitor. Beyond 3.5x this, `CRITICAL`. |
 | `min_power_trace_width_mm` | `float` | `0.3` | Guideline minimum width (mm) for power rails. A trace below it that still matches its own net class is a `SUGGESTION`. |
-| `max_diff_pair_skew_mm` | `float` | `0.15` | Largest length mismatch (mm) within a differential pair. Above 1 mm, `CRITICAL`. |
+| `max_diff_pair_skew_mm` | `float` | `0.15` | Largest length mismatch (mm) within a differential pair. Above 1 mm, `CRITICAL` for a pair named as a fast interface (USB, HDMI, PCIe, LVDS, Ethernet, clocks); any other pair is a `SUGGESTION`. |
 | `vision_model` | `string` | `"gemini-3.8-flash"` | `gemini-*`, `gpt-*`, `fable-5`, `fable-5.1`, `claude-*`, or `mock` for offline runs. |
 | `vision_api_key_env` | `string \| null` | `null` | Override for the variable holding the vision API key. When unset, each provider uses its own: `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY` (Claude also accepts an `ant auth login` profile). Claude requires `pip install 'pcb-inspector[claude]'`. |
 | `vision_cache_dir` | `string` | `".pcb_vision_cache"` | Cache of vision responses, keyed on model, prompts, view and image bytes. |
@@ -251,10 +251,10 @@ Run `pcb-inspector rules` for the live list; this table matches it.
 
 | Rule ID | Name | Category | Default Severity | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `KICAD-DRC-ERC-001` | Native KiCad DRC/ERC Verification | `DRC_ERC` | `CRITICAL` | Runs `kicad-cli pcb drc` and `sch erc` and parses their violations. A missing `kicad-cli` or a failed run is itself reported, never read as a clean board. |
+| `KICAD-DRC-ERC-001` | Native KiCad DRC/ERC Verification | `DRC_ERC` | `CRITICAL` | Runs `kicad-cli pcb drc` and `sch erc` and parses their violations. When the project has a schematic, DRC also checks schematic parity, reported as one finding per kind of mismatch. A missing `kicad-cli` or a failed run is itself reported, never read as a clean board. |
 | `HEUR-DEC-001` | Decoupling Capacitor Proximity | `DECOUPLING` | `WARNING` | Distance from each IC supply pin to its nearest bypass capacitor, plus board thickness for a capacitor on the opposite side. A rail with no capacitor at all is `CRITICAL`. |
 | `HEUR-PWR-001` | Power Rail Minimum Trace Width | `POWER_DELIVERY` | `WARNING` | One finding per net and layer. Narrower than the net's own net class: `WARNING`. Matching the net class but below the guideline: `SUGGESTION`. |
-| `HEUR-DIFF-001` | Differential Pair Length Matching (Skew) | `SIGNAL_INTEGRITY` | `WARNING` | Length mismatch for `_P/_N`, `+/-`, `_DP/_DM` and `H/L` pairs, counting arc tracks and via transitions. |
+| `HEUR-DIFF-001` | Differential Pair Length Matching (Skew) | `SIGNAL_INTEGRITY` | `WARNING` | Length mismatch for `_P/_N`, `+/-`, `_DP/_DM` and `H/L` pairs, counting arc tracks and via transitions. Pairs not named as a fast interface are reported as `SUGGESTION`. |
 | `HEUR-DCDC-001` | DC/DC Converter Switching Loop Area | `POWER_DELIVERY` | `WARNING` | Hull area of a switching node, confirmed by a declared `SW`/`LX` pin or by inductor-to-converter topology. |
 | `HEUR-GND-001` | Ground Return Plane Continuity | `SIGNAL_INTEGRITY` | `WARNING` | Share of each signal segment over a ground plane on an adjacent copper layer, or no ground plane at all. |
 | `VISION-AI-001` | Multimodal Visual Review | `VISION` | `WARNING` | Raytraced PNG of each side, reviewed separately, for polarity marks, Pin 1 indicators, silkscreen legibility, acid traps and edge clearance. |

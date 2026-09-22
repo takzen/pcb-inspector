@@ -11,7 +11,7 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://github.com/takzen/pcb-inspector/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/Release-v0.1.0-blue?style=flat-square" alt="Release: v0.1.0"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-355%20passed%20%7C%2090%25-brightgreen?style=flat-square" alt="Tests: 355 passed"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-402%20passed%20%7C%2090%25-brightgreen?style=flat-square" alt="Tests: 402 passed"></a>
   <a href="https://kicad.org"><img src="https://img.shields.io/badge/KiCad-8.0%2B%20%7C%209.0%20%7C%2010-314CB6?style=flat-square&logo=kicad&logoColor=white" alt="KiCad Support"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="#-mcp-server--agentic-integration"><img src="https://img.shields.io/badge/MCP%20Server-Supported-5B5EA6?style=flat-square" alt="MCP Server"></a>
@@ -123,7 +123,8 @@ flowchart TD
 Runs KiCad's native verification tools through `kicad-cli`:
 - **ERC** — Electrical Rules Check
 - **DRC** — Design Rules Check
-- Connectivity & netlist verification
+- Connectivity & netlist verification, including schematic parity: footprints missing from
+  or extra on the board and pads on the wrong net, grouped by kind
 - Clearance and short-circuit detection
 - Unconnected pins and nets
 - Manufacturing and fabrication constraint violations
@@ -138,12 +139,15 @@ from the `.kicad_pro`, the copper stack order, and each pad's schematic pin name
 
 - **Decoupling capacitor placement** (`HEUR-DEC-001`) — distance from every IC supply pin to its
   nearest bypass capacitor, adding the board thickness for capacitors on the opposite side. Supply
-  pins are recognised by their schematic pin name (`VDD`, `VCC`, `3.3V`…) as well as the net name.
+  pins are recognised by their schematic pin name (`VDD`, `VCC`, `3.3V`, `+VS`…) as well as the
+  net name; a bias or reference net such as `BIAS_1.65V` is not mistaken for a rail.
 - **Power rail trace width** (`HEUR-PWR-001`) — one finding per net and layer. A trace narrower
   than **its own net class** is a warning; one that matches its net class but sits below the
   configured power-rail guideline is a suggestion, since KiCad treats net class widths as defaults.
 - **Differential pair skew** (`HEUR-DIFF-001`) — length mismatch across `_P/_N`, `+/-`,
-  `_DP/_DM` and `H/L` pairs, counting curved (arc) routing and via transitions.
+  `_DP/_DM` and `H/L` pairs, counting curved (arc) routing and via transitions. Only pairs named
+  as a fast interface (USB, HDMI, PCIe, LVDS, Ethernet, clocks…) can be critical; a CAN bus or an
+  analog sensor pair is a suggestion, since millimetres of skew are picoseconds.
 - **Switching regulator loop area** (`HEUR-DCDC-001`) — switching nodes confirmed by a declared
   `SW`/`LX` pin or by inductor-to-converter topology, never by net name alone.
 - **Ground reference** (`HEUR-GND-001`) — the share of each signal segment lying over a ground
@@ -289,6 +293,9 @@ When launched with `pcb-inspector mcp`, the server provides:
 - [x] Golden Sample reference benchmark boards (`clean_board` & `flawed_board`)
 
 ### Unreleased — reliability and accuracy
+- [x] Checked against a real KiCad 10 analog board: the CLI no longer crashes on ERC titles
+  such as `ERC [/]:`, supply rails are recognised the same way by every rule (`+3.3V` was
+  missed, `BIAS_1.65V` was taken for one), and DRC checks schematic parity
 - [x] A target holding no board or schematic is a usage error (exit 2), no longer a PASSED
   audit with a 100/100 health score; the MCP tools return an error for it too
 - [x] Never report a clean board for work not done: failed or missing `kicad-cli` is a finding,
