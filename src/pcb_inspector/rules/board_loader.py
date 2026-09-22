@@ -81,6 +81,25 @@ def find_pcb_file(context: Any) -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def find_design_file(context: Any) -> Path | None:
+    """Locate the board, or failing that the schematic, a target refers to.
+
+    None means there is nothing to audit. Every rule then returns no findings,
+    which used to be reported as a clean PASSED run.
+    """
+    pcb = find_pcb_file(context)
+    if pcb is not None:
+        return pcb
+    if not isinstance(context, (str, Path)):
+        return None
+
+    p = Path(context)
+    if p.is_dir():
+        return next(iter(sorted(p.glob("*.kicad_sch"))), None)
+    sch = p if p.suffix == ".kicad_sch" else p.with_suffix(".kicad_sch")
+    return sch if sch.is_file() else None
+
+
 def resolve_board(context: Any) -> PcbBoard | None:
     """Resolve a rule context into a parsed board.
 

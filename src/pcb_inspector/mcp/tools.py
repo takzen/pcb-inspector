@@ -12,6 +12,7 @@ from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.exceptions import ConfigError
 from pcb_inspector.core.layers import evaluate_layer_status, incomplete_layers
 from pcb_inspector.core.models import AuditResult, Severity
+from pcb_inspector.rules.board_loader import find_design_file, find_pcb_file
 from pcb_inspector.rules.decoupling import DecouplingProximityRule
 from pcb_inspector.rules.kicad_drc_erc import KiCadDrcErcRule
 from pcb_inspector.rules.registry import default_registry
@@ -56,6 +57,15 @@ def _load_config(config_path: str | None, project_dir: Path) -> InspectorConfig 
         return {"error": f"Configuration error: {err}", "passed": False, "findings": []}
 
 
+def _nothing_to_audit(path: str, kind: str) -> dict[str, Any]:
+    """Error payload for a target holding no KiCad design.
+
+    Every rule returns no findings for such a target, which used to come back as
+    passed=True: an agent would take an empty directory for a clean board.
+    """
+    return {"error": f"No KiCad {kind} found at '{path}'.", "passed": False, "findings": []}
+
+
 def inspect_project_tool(
     project_path: str,
     fail_on: str = "CRITICAL",
@@ -85,6 +95,9 @@ def inspect_project_tool(
             "findings": [],
             "actionable_fixes": [],
         }
+
+    if find_design_file(p) is None:
+        return _nothing_to_audit(project_path, "board or schematic")
 
     try:
         threshold = Severity(fail_on.upper())
@@ -158,6 +171,8 @@ def check_decoupling_tool(
     p = Path(pcb_path)
     if not p.exists():
         return {"error": f"Path '{pcb_path}' does not exist.", "passed": False, "findings": []}
+    if find_pcb_file(p) is None:
+        return _nothing_to_audit(pcb_path, "board")
 
     project_dir = p if p.is_dir() else p.parent
     loaded = _load_config(config_path, project_dir)
@@ -199,6 +214,8 @@ def run_drc_tool(
     p = Path(pcb_path)
     if not p.exists():
         return {"error": f"Path '{pcb_path}' does not exist.", "passed": False, "findings": []}
+    if find_design_file(p) is None:
+        return _nothing_to_audit(pcb_path, "board or schematic")
 
     project_dir = p if p.is_dir() else p.parent
     loaded = _load_config(config_path, project_dir)

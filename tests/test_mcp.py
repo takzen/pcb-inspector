@@ -195,3 +195,20 @@ def test_mcp_invalid_fail_on_is_an_error_not_critical(tmp_path) -> None:  # type
     out = inspect_project_tool(str(board), fail_on="SOMETIMES")
     assert out["passed"] is False
     assert "Invalid fail_on" in out["error"]
+
+
+def test_mcp_tools_reject_a_target_without_a_design(tmp_path: Path) -> None:
+    """An empty directory used to come back as passed=True, a clean board to an agent."""
+    for out in (
+        inspect_project_tool(str(tmp_path)),
+        run_drc_tool(str(tmp_path)),
+        check_decoupling_tool(str(tmp_path)),
+    ):
+        assert out["passed"] is False
+        assert "No KiCad" in out["error"]
+    assert get_actionable_fixes_tool(str(tmp_path)) == []
+
+
+def test_decoupling_tool_needs_a_board_not_a_schematic(tmp_path: Path) -> None:
+    (tmp_path / "power.kicad_sch").write_text("(kicad_sch (version 20231120))", encoding="utf-8")
+    assert check_decoupling_tool(str(tmp_path))["error"] == f"No KiCad board found at '{tmp_path}'."

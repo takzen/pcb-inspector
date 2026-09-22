@@ -229,3 +229,19 @@ def test_broken_config_file_exits_2_not_1(tmp_path: Path) -> None:
     result = runner.invoke(app, ["analyze", str(CLEAN), "-c", str(cfg)])
     assert result.exit_code == 2
     assert "Configuration error" in result.stdout
+
+
+@pytest.mark.parametrize("command", ["check", "drc", "analyze"])
+def test_target_without_a_design_is_a_usage_error(tmp_path: Path, command: str) -> None:
+    """An empty directory used to report PASSED with a 100/100 health score."""
+    (tmp_path / "README.md").write_text("no board here\n", encoding="utf-8")
+    result = runner.invoke(app, [command, str(tmp_path)])
+    assert result.exit_code == 2
+    assert "No KiCad board or schematic found" in result.stdout
+
+
+def test_schematic_only_directory_is_audited(tmp_path: Path) -> None:
+    (tmp_path / "power.kicad_sch").write_text("(kicad_sch (version 20231120))", encoding="utf-8")
+    result = runner.invoke(app, ["analyze", str(tmp_path)])
+    assert "No KiCad board or schematic found" not in result.stdout
+    assert result.exit_code == 0

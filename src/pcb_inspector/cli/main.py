@@ -44,6 +44,7 @@ from pcb_inspector.reporters.html_reporter import HtmlReporter
 from pcb_inspector.reporters.json_reporter import JsonReporter
 from pcb_inspector.reporters.markdown_reporter import MarkdownReporter
 from pcb_inspector.reporters.terminal_reporter import TerminalReporter
+from pcb_inspector.rules.board_loader import find_design_file
 from pcb_inspector.rules.registry import default_registry
 
 app = typer.Typer(
@@ -180,8 +181,16 @@ def _run_audit(request: AuditRequest) -> None:
     """Load config, evaluate, report, and set the exit code.
 
     Raises:
-        typer.Exit: With code 1 when the run does not meet its threshold.
+        typer.Exit: With code 1 when the run does not meet its threshold, and
+            code 2 when the target holds no KiCad design or the config is invalid.
     """
+    if find_design_file(request.project_path) is None:
+        # With nothing to audit every rule returns no findings, which used to
+        # print PASSED with a 100/100 health score.
+        console.print(
+            f"[bold red]No KiCad board or schematic found at:[/bold red] {request.project_path}"
+        )
+        raise typer.Exit(code=2)
 
     def run_once() -> bool:
         start_time = time.perf_counter()

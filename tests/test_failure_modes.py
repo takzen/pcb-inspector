@@ -312,3 +312,32 @@ def test_cli_drc_failure_does_not_exit_zero(tmp_path: Path) -> None:
 
     assert res.exit_code == 1, res.stdout
     assert "kicad-cli" in res.stdout
+
+
+# --------------------------------------------------------------------------
+# A target with nothing to audit
+# --------------------------------------------------------------------------
+
+
+def test_find_design_file_prefers_the_board(tmp_path: Path) -> None:
+    (tmp_path / "a.kicad_sch").write_text("(kicad_sch)", encoding="utf-8")
+    board = tmp_path / "a.kicad_pcb"
+    board.write_text("(kicad_pcb)", encoding="utf-8")
+    assert board_loader.find_design_file(tmp_path) == board
+    assert board_loader.find_design_file(tmp_path / "a.kicad_pro") == board
+
+
+def test_find_design_file_falls_back_to_the_schematic(tmp_path: Path) -> None:
+    sch = tmp_path / "a.kicad_sch"
+    sch.write_text("(kicad_sch)", encoding="utf-8")
+    assert board_loader.find_design_file(tmp_path) == sch
+    assert board_loader.find_design_file(sch) == sch
+    assert board_loader.find_design_file(tmp_path / "a.kicad_pro") == sch
+
+
+def test_find_design_file_finds_nothing_where_there_is_nothing(tmp_path: Path) -> None:
+    notes = tmp_path / "notes.md"
+    notes.write_text("no design", encoding="utf-8")
+    assert board_loader.find_design_file(tmp_path) is None
+    assert board_loader.find_design_file(notes) is None
+    assert board_loader.find_design_file(object()) is None
