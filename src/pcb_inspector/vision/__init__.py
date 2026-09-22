@@ -3,6 +3,7 @@
 from pcb_inspector.vision.base import BaseVisionReviewer
 from pcb_inspector.vision.client import (
     BaseVisionClient,
+    ClaudeVisionClient,
     FableVisionClient,
     GeminiVisionClient,
     MockVisionClient,
@@ -20,6 +21,7 @@ __all__ = [
     "BaseVisionClient",
     "BaseVisionReviewer",
     "BoardRenderer",
+    "ClaudeVisionClient",
     "FableVisionClient",
     "GeminiVisionClient",
     "MockVisionClient",

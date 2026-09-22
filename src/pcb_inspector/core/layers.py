@@ -17,7 +17,9 @@ from pcb_inspector.core.models import Finding, FindingCategory
 #: Finding IDs emitted by rules to signal that a layer could not run.
 LAYER1_UNAVAILABLE_ID = "DRC-CLI-UNAVAILABLE"
 LAYER1_FAILED_PREFIX = "DRC-EXEC-FAILED"
-LAYER3_FAILURE_IDS = frozenset({"VIS-NO-API-KEY", "VIS-RENDER-ERR", "VIS-API-CALL-ERR"})
+#: Prefixes of finding IDs meaning the vision layer did not complete. Call
+#: failures carry the side reviewed, e.g. VIS-API-CALL-ERR-BOTTOM.
+LAYER3_FAILURE_PREFIXES = ("VIS-NO-API-KEY", "VIS-RENDER-ERR", "VIS-API-CALL-ERR")
 
 HEURISTIC_CATEGORIES = frozenset(
     {
@@ -94,7 +96,7 @@ def evaluate_layer_status(
     ids = {f.id for f in findings}
     layer1_unavailable = LAYER1_UNAVAILABLE_ID in ids
     layer1_failed = any(i.startswith(LAYER1_FAILED_PREFIX) for i in ids)
-    layer3_failed = bool(ids & LAYER3_FAILURE_IDS)
+    layer3_failed = any(i.startswith(LAYER3_FAILURE_PREFIXES) for i in ids)
 
     status: dict[str, str] = {}
     for layer in Layer:

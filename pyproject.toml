@@ -23,7 +23,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Claude vision reviews go through the official Anthropic SDK. 1.7 is the first
+# release verified to type `fallbacks="default"`, used for refusal fallbacks.
+claude = [
+    "anthropic>=1.7",
+]
 dev = [
+    "anthropic>=1.7",
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
     "pytest-mock>=3.14.0",

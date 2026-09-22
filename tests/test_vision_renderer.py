@@ -73,3 +73,73 @@ def test_renderer_with_cli_mock(tmp_path: Path) -> None:
     assert renders["top"].exists()
     assert renders["bottom"].exists()
     assert renders["top"].read_text(encoding="utf-8") == "<svg>mocked</svg>"
+
+
+# --------------------------------------------------------------------------
+# P1-10a: kicad-cli raytraces PNG; the offline SVG invents nothing
+# --------------------------------------------------------------------------
+
+
+def test_cli_render_uses_pcb_render_to_png(tmp_path: Path) -> None:
+    """kicad-cli has no `pcb export png`; `pcb render` produces the raster."""
+    import subprocess
+
+    pcb_file = tmp_path / "board.kicad_pcb"
+    pcb_file.write_text(SAMPLE_PCB, encoding="utf-8")
+    exe = tmp_path / "kicad-cli"
+    exe.write_text("", encoding="utf-8")
+    cli = KiCadCli.__new__(KiCadCli)
+    cli.executable = exe
+
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, action, timeout=None):  # type: ignore[no-untyped-def]
+        seen.append(cmd)
+        Path(cmd[cmd.index("--output") + 1]).write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    cli._run = fake_run  # type: ignore[method-assign]
+    cli.is_available = lambda: True  # type: ignore[method-assign]
+
+    renders = BoardRenderer(kicad_cli=cli).render_layers(pcb_file, output_dir=tmp_path / "out")
+
+    assert renders["top"].suffix == ".png"
+    assert renders["bottom"].suffix == ".png"
+    assert [c[1:3] for c in seen] == [["pcb", "render"], ["pcb", "render"]]
+    assert [c[c.index("--side") + 1] for c in seen] == ["top", "bottom"]
+
+
+def test_failed_cli_render_falls_back_to_svg(tmp_path: Path) -> None:
+    from pcb_inspector.core.exceptions import KiCadCliExecutionError
+
+    pcb_file = tmp_path / "board.kicad_pcb"
+    pcb_file.write_text(SAMPLE_PCB, encoding="utf-8")
+    cli = MagicMock(spec=KiCadCli)
+    cli.is_available.return_value = True
+    renderer = BoardRenderer(kicad_cli=cli)
+
+    def boom(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise KiCadCliExecutionError("render crashed")
+
+    renderer._render_with_cli = boom  # type: ignore[method-assign]
+    renders = renderer.render_layers(pcb_file, output_dir=tmp_path / "out")
+
+    assert renders["top"].suffix == ".svg"
+    assert "<svg" in renders["top"].read_text(encoding="utf-8")
+
+
+def test_offline_render_draws_no_invented_pin1_marker(tmp_path: Path) -> None:
+    """The fallback reads no silkscreen, so it must not draw a Pin 1 dot.
+
+    It used to add one beside pad 1 of every IC unconditionally -- fabricated
+    evidence for exactly the question the vision prompt asks.
+    """
+    pcb_file = tmp_path / "board.kicad_pcb"
+    pcb_file.write_text(SAMPLE_PCB, encoding="utf-8")
+
+    renders = BoardRenderer(auto_detect=False).render_layers(pcb_file, output_dir=tmp_path / "o")
+    svg = renders["top"].read_text(encoding="utf-8")
+
+    # Vias are the only circles this board should produce (outer ring + drill).
+    assert svg.count("<circle") == 2
+    assert 'r="0.3"' not in svg

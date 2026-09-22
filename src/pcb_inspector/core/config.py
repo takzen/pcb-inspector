@@ -53,8 +53,14 @@ class InspectorConfig(BaseModel):
         default="gemini-3.8-flash",
         description="Model identifier for visual inspection (gemini-3.8-flash, fable-5, gpt-6-astra)",
     )
-    vision_api_key_env: str = Field(
-        default="GEMINI_API_KEY", description="Environment variable holding the Vision API key"
+    vision_api_key_env: str | None = Field(
+        default=None,
+        description=(
+            "Environment variable holding the vision API key. Leave unset to use the "
+            "selected provider's standard variable (GEMINI_API_KEY, OPENAI_API_KEY, or "
+            "ANTHROPIC_API_KEY). It used to default to GEMINI_API_KEY for every provider, "
+            "so choosing an OpenAI model with only OPENAI_API_KEY set was refused."
+        ),
     )
     vision_cache_dir: str = Field(
         default=".pcb_vision_cache",

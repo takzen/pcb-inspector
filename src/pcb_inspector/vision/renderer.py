@@ -1,17 +1,35 @@
 """Board rendering pipeline for multimodal vision inspections.
 
-Generates 2D SVG vector renders of top and bottom PCB layers either via
-`kicad-cli pcb export svg` or through an internal SVG vector compositor.
+With kicad-cli available, each side is raytraced to PNG by ``kicad-cli pcb
+render``: the real board as KiCad draws it, silkscreen, component bodies and
+all. That is the only input a hosted vision model is given.
+
+Without kicad-cli, an internal SVG compositor draws copper, pads and reference
+designators. It carries no silkscreen, so it cannot answer the questions the
+vision prompt asks about polarity marks and Pin 1 indicators, and it is SVG,
+which neither Gemini nor OpenAI accepts. It is kept for the offline mock
+client only.
 """
 
 from __future__ import annotations
 
-import subprocess
+import logging
 import tempfile
 from pathlib import Path
 
+from pcb_inspector.core.exceptions import KiCadCliExecutionError
 from pcb_inspector.kicad.cli_wrapper import KiCadCli
 from pcb_inspector.kicad.pcb_model import PcbBoard, load_pcb_board
+
+logger = logging.getLogger(__name__)
+
+#: Raster size for vision renders. Large enough to read a 0402 refdes, small
+#: enough to stay well inside provider image limits.
+RENDER_WIDTH = 1600
+RENDER_HEIGHT = 1200
+
+#: kicad-cli raytraces, which takes a few seconds per side on a dense board.
+RENDER_TIMEOUT_SECONDS = 180
 
 
 class BoardRenderer:
@@ -33,9 +51,12 @@ class BoardRenderer:
         pcb_path: Path | str,
         output_dir: Path | str | None = None,
     ) -> dict[str, Path]:
-        """Render front and back views of a PCB into SVG files.
+        """Render the top and bottom of a board.
 
-        Returns a dictionary mapping view names ('top', 'bottom') to file paths.
+        Returns a mapping of view name ('top', 'bottom') to file. The files are
+        PNG when kicad-cli rendered them and SVG when the offline fallback did;
+        callers that talk to a hosted model must check which they got, since
+        only the PNG is accepted there.
         """
         path = Path(pcb_path)
         if not path.exists():
@@ -44,53 +65,62 @@ class BoardRenderer:
         out_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(prefix="pcb_render_"))
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        top_out = out_dir / f"{path.stem}_top.svg"
-        bot_out = out_dir / f"{path.stem}_bottom.svg"
-
-        # Attempt kicad-cli export first if binary is available
-        cli_success = False
         if self.kicad_cli and self.kicad_cli.is_available():
+            renders = {
+                "top": out_dir / f"{path.stem}_top.png",
+                "bottom": out_dir / f"{path.stem}_bottom.png",
+            }
             try:
-                self._render_with_cli(path, top_out, side="top")
-                self._render_with_cli(path, bot_out, side="bottom")
-                if top_out.exists() and bot_out.exists() and top_out.stat().st_size > 0:
-                    cli_success = True
-            except Exception:
-                cli_success = False
+                for side, out in renders.items():
+                    self._render_with_cli(path, out, side=side)
+                if all(out.exists() and out.stat().st_size > 0 for out in renders.values()):
+                    return renders
+                logger.warning("kicad-cli render produced no image; using the offline renderer.")
+            except KiCadCliExecutionError as err:
+                logger.warning("kicad-cli render failed (%s); using the offline renderer.", err)
 
-        if not cli_success:
-            # Fallback to internal programmatic vector renderer
-            board = load_pcb_board(path)
-            self._render_programmatic_svg(board, top_out, side="top")
-            self._render_programmatic_svg(board, bot_out, side="bottom")
-
-        return {"top": top_out, "bottom": bot_out}
+        # Offline fallback: SVG, usable by the mock client only.
+        board = load_pcb_board(path)
+        renders = {
+            "top": out_dir / f"{path.stem}_top.svg",
+            "bottom": out_dir / f"{path.stem}_bottom.svg",
+        }
+        for side, out in renders.items():
+            self._render_programmatic_svg(board, out, side=side)
+        return renders
 
     def _render_with_cli(self, pcb_path: Path, output_file: Path, side: str = "top") -> None:
-        """Render a composite layer SVG using kicad-cli."""
-        if not self.kicad_cli:
-            raise RuntimeError("KiCad CLI not configured")
+        """Raytrace one side of the board to PNG with ``kicad-cli pcb render``.
 
-        layers = "F.Cu,F.Silkscreen,Edge.Cuts" if side == "top" else "B.Cu,B.Silkscreen,Edge.Cuts"
+        Goes through KiCadCli's runner, so it inherits the timeout and exit-code
+        checks. It previously called subprocess.run directly with neither, so a
+        stalled render hung the audit.
+
+        Raises:
+            KiCadCliExecutionError: If kicad-cli fails, times out, or is missing.
+        """
+        if not self.kicad_cli:
+            raise KiCadCliExecutionError("kicad-cli is not configured")
+
         cmd = [
             str(self.kicad_cli.executable),
             "pcb",
-            "export",
-            "svg",
-            "--layers",
-            layers,
-            "--page-size-mode",
-            "2",
-            "--exclude-drawing-sheet",
-            "--mode-single",
+            "render",
+            "--side",
+            side,
+            "--width",
+            str(RENDER_WIDTH),
+            "--height",
+            str(RENDER_HEIGHT),
+            "--quality",
+            "basic",
             "--output",
             str(output_file),
+            str(pcb_path),
         ]
-        if side == "bottom":
-            cmd.append("--mirror")
-        cmd.append(str(pcb_path))
-
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        action = f"3D render ({side}) of {pcb_path.name}"
+        res = self.kicad_cli._run(cmd, action=action, timeout=RENDER_TIMEOUT_SECONDS)
+        self.kicad_cli._check_returncode(res, action)
 
     def _render_programmatic_svg(
         self,
@@ -201,15 +231,10 @@ class BoardRenderer:
                     f'text-anchor="middle">{fp.refdes}</text>'
                 )
 
-                # Pin 1 indicator if IC
-                if fp.is_ic and fp.pads:
-                    pad1 = fp.get_pad("1") or fp.pads[0]
-                    # Draw a small silkscreen dot next to Pin 1
-                    dot_x = pad1.at_x - (1.0 if pad1.at_x <= fp.at_x else -1.0)
-                    dot_y = pad1.at_y
-                    svg_parts.append(
-                        f'<circle cx="{dot_x:.2f}" cy="{dot_y:.2f}" r="0.3" fill="#ffffff" />'
-                    )
+                # No Pin 1 marker is drawn. This renderer reads no silkscreen,
+                # so any marker would be invented. It used to draw a dot beside
+                # pad 1 of every IC unconditionally -- fabricating exactly the
+                # evidence the vision prompt asks the model to look for.
 
         svg_parts.append("</svg>")
         output_file.write_text("\n".join(svg_parts), encoding="utf-8")

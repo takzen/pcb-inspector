@@ -205,7 +205,7 @@ custom_rules:
 | `max_switching_loop_area_mm2` | `float` | `50.0` | Maximum convex hull loop area (in mm²) between switching inductor, diode/FET, and input/output capacitors. |
 | `min_gnd_overlap_ratio` | `float` | `0.85` | Minimum fraction of signal trace length that must run directly over a continuous ground polygon. |
 | `vision_model` | `string` | `"gemini-3.8-flash"` | Vision LLM model identifier: `"gemini-3.8-flash"`, `"fable-5"`, `"gpt-6-astra"`, `"mock"`. |
-| `vision_api_key_env` | `string` | `"GEMINI_API_KEY"` | Environment variable holding API credentials (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `FABLE_API_KEY`). |
+| `vision_api_key_env` | `string \| null` | `null` | Override for the variable holding the vision API key. When unset, each provider uses its own: `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY` (Claude also accepts an `ant auth login` profile). Claude requires `pip install 'pcb-inspector[claude]'`. |
 | `vision_cache_dir` | `string` | `".pcb_vision_cache"` | Cache directory storing model responses to eliminate redundant API billing. |
 | `fail_on` | `string` | `"CRITICAL"` | Finding severity that triggers non-zero exit code: `"CRITICAL"`, `"WARNING"`, `"SUGGESTION"`. |
 | `custom_rules` | `dict` | `{}` | Per-rule dictionary for toggling `enabled: true/false` and custom parameters. |

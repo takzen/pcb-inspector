@@ -46,8 +46,12 @@ max_diff_pair_skew_mm: 0.15
 # Model identifier used for optical inspection and DFM review
 vision_model: "gemini-3.8-flash"
 
-# Environment variable containing the API key for the vision model
-vision_api_key_env: "GEMINI_API_KEY"
+# Environment variable containing the API key for the vision model.
+# Leave null to use the chosen provider's own variable: GEMINI_API_KEY for
+# gemini-*, OPENAI_API_KEY for gpt-*, ANTHROPIC_API_KEY for fable-* / claude-*.
+# (Claude also accepts an `ant auth login` profile, so no variable is required.)
+# Set this only to read the key from a non-standard variable.
+vision_api_key_env: null
 
 # ------------------------------------------------------------------------------
 # 4. CI/CD & Reporting Settings
