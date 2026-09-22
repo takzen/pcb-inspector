@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -247,6 +248,12 @@ class GeminiVisionClient(BaseVisionClient):
         key = api_key or os.environ.get(self.api_key_env or "", "")
         super().__init__(model_name=model_name, api_key=key, cache_dir=cache_dir)
 
+    @property
+    def generation(self) -> int:
+        """Major Gemini version in the model name; unknown names count as current."""
+        match = re.match(r"gemini-(\d+)", self.model_name.strip().lower())
+        return int(match.group(1)) if match else 3
+
     def _execute_request(self, prompt: str, image_paths: list[Path]) -> str:
         if not self.api_key:
             raise ValueError(
@@ -258,23 +265,25 @@ class GeminiVisionClient(BaseVisionClient):
             mime, b64 = _encode_image_base64(img_path)
             parts.append({"inlineData": {"mimeType": mime, "data": b64}})
 
+        generation_config: dict[str, Any] = {"responseMimeType": "application/json"}
+        if self.generation < 3:
+            # Gemini 3 and later are tuned for their default sampling; Google
+            # advises against lowering the temperature, which can make them loop.
+            generation_config["temperature"] = 0.1
+
         payload = {
             "contents": [{"role": "user", "parts": parts}],
             "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT_VISION}]},
-            "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"},
+            "generationConfig": generation_config,
         }
 
-        model = self.model_name
-        if model in ("gemini-flash-3.8", "gemini-3.8-flash"):
-            # Pre-existing alias to an endpoint known to answer; logged so the
-            # substitution is not silent.
-            logger.info("Vision model %s is served by gemini-2.0-flash.", model)
-            model = "gemini-2.0-flash"
-
+        # The configured name is sent as-is. It used to be rewritten from
+        # gemini-3.8-flash to gemini-2.0-flash, so the default configuration
+        # never reached the model it named.
         # The key travels in a header. It used to sit in the query string,
         # where it lands in proxy logs, access logs and error messages.
         result = self._post_json(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent",
             payload,
             {"x-goog-api-key": self.api_key},
         )

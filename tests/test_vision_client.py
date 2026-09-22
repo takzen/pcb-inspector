@@ -195,6 +195,33 @@ def test_gemini_sends_the_image_as_png(tmp_path: Path) -> None:
     assert parts[1]["inlineData"]["mimeType"] == "image/png"
 
 
+def test_gemini_requests_the_configured_model(tmp_path: Path) -> None:
+    """The default model used to be rewritten to gemini-2.0-flash on the wire."""
+    client = GeminiVisionClient(api_key="k")
+    with patch("urllib.request.urlopen", return_value=_http_response(GEMINI_OK)) as urlopen:
+        client.analyze([_png(tmp_path)])
+
+    url = urlopen.call_args.args[0].full_url
+    assert url.endswith("/models/gemini-3.8-flash:generateContent")
+
+
+@pytest.mark.parametrize(
+    ("model", "temperature"),
+    [("gemini-3.8-flash", None), ("gemini-3.5-flash", None), ("gemini-2.5-flash", 0.1)],
+)
+def test_gemini_3_keeps_its_default_temperature(
+    tmp_path: Path, model: str, temperature: float | None
+) -> None:
+    """Google advises against lowering the temperature on Gemini 3.x."""
+    client = GeminiVisionClient(model_name=model, api_key="k")
+    with patch("urllib.request.urlopen", return_value=_http_response(GEMINI_OK)) as urlopen:
+        client.analyze([_png(tmp_path)])
+
+    config = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))["generationConfig"]
+    assert config.get("temperature") == temperature
+    assert config["responseMimeType"] == "application/json"
+
+
 # --------------------------------------------------------------------------
 # P1-10d: retries
 # --------------------------------------------------------------------------

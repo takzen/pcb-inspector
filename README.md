@@ -11,7 +11,7 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://github.com/takzen/pcb-inspector/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/Release-v0.1.0-blue?style=flat-square" alt="Release: v0.1.0"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-342%20passed%20%7C%2090%25-brightgreen?style=flat-square" alt="Tests: 342 passed"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-346%20passed%20%7C%2090%25-brightgreen?style=flat-square" alt="Tests: 346 passed"></a>
   <a href="https://kicad.org"><img src="https://img.shields.io/badge/KiCad-8.0%2B%20%7C%209.0%20%7C%2010-314CB6?style=flat-square&logo=kicad&logoColor=white" alt="KiCad Support"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="#-mcp-server--agentic-integration"><img src="https://img.shields.io/badge/MCP%20Server-Supported-5B5EA6?style=flat-square" alt="MCP Server"></a>
@@ -297,7 +297,8 @@ When launched with `pcb-inspector mcp`, the server provides:
 - [x] Heuristics fixed for false positives on connectors, SWD/PHY nets and matched pairs, with
   repair actions keyed to the rule that produced them
 - [x] Vision review works with hosted models: raytraced PNG per side via `kicad-cli pcb render`,
-  Claude through the Anthropic SDK with refusal fallbacks
+  Claude through the Anthropic SDK with refusal fallbacks, Gemini requests reach the configured
+  model instead of being rewritten to `gemini-2.0-flash`
 - [x] Findings correlation, ground-reference check and watch mode made fast enough for
   26,000-track boards
 - [x] HTML report search and category filtering; smoke tests over KiCad's own demo boards
