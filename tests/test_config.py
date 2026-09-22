@@ -121,3 +121,28 @@ def test_config_load_project_dir_override(tmp_path: Path) -> None:
     assert cfg.max_decoupling_distance_mm == 1.8
     assert cfg.fail_on == Severity.SUGGESTION
 
+
+
+def test_every_yaml_example_in_the_manual_is_valid(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The manual documented two config keys that never existed and a wrong
+    default. This keeps its examples honest against the real schema."""
+    import re
+
+    manual = (Path(__file__).parent.parent / "MANUAL.md").read_text(encoding="utf-8")
+    # Only the configuration sections: later ones hold GitHub Actions workflows,
+    # which are YAML but not pcb-inspector configs.
+    config_sections = manual[
+        manual.index("## 3. Configuration System") : manual.index("## 5. Active Inspection Rules")
+    ]
+    blocks = re.findall(r"```yaml\n(.*?)```", config_sections, re.DOTALL)
+    assert len(blocks) >= 3, "expected the manual's config examples"
+
+    for i, block in enumerate(blocks):
+        cfg_file = tmp_path / f"example_{i}.yaml"
+        cfg_file.write_text(block, encoding="utf-8")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            InspectorConfig.from_file(cfg_file)
+        assert "unknown setting" not in caplog.text, f"MANUAL.md YAML block {i}: {caplog.text}"

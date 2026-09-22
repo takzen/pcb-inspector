@@ -65,11 +65,12 @@ Runs a full 3-layer verification audit on a KiCad project.
 | :--- | :--- | :--- | :--- |
 | `PROJECT_PATH` | *(Argument)* | *(Required)* | Path to `.kicad_pro`, `.kicad_pcb`, `.kicad_sch`, or project directory. |
 | `--output` | `-o` | `None` | Path where the audit report will be written. |
-| `--format` | `-f` | `markdown` | Output report format: `markdown`, `json`, `html`, or `all`. |
+| `--format` | `-f` | *(none)* | `markdown`, `md`, `json`, `html`, `both` (markdown + json) or `all`. Unknown values are rejected. Without `--output`, reports go to `output_dir`. |
 | `--fail-on` | N/A | `CRITICAL` | Severity threshold triggering exit code `1`: `CRITICAL`, `WARNING`, `SUGGESTION`. |
-| `--config` | `-c` | `None` | Explicit path to a custom YAML configuration file. |
+| `--config` | `-c` | `None` | Explicit path to a custom YAML configuration file. It must exist. |
 | `--vision` | N/A | `false` | Enable Layer 3 Multimodal Vision AI review. |
 | `--vision-model` | N/A | `gemini-3.8-flash` | Model identifier: `gemini-3.8-flash`, `fable-5`, `gpt-6-astra`, `mock`. |
+| `--require-kicad-cli` | N/A | `false` | Fail the run when `kicad-cli` is missing instead of skipping Layer 1. |
 | `--watch` | `-w` | `false` | Continuously monitor layout files and re-run check on save. |
 
 ### `pcb-inspector drc [OPTIONS] PROJECT_PATH`
@@ -146,10 +147,15 @@ enable_vision: false
 
 # Heuristic Rule Defaults
 max_decoupling_distance_mm: 3.5
-min_power_trace_width_mm: 0.35
+min_power_trace_width_mm: 0.3
 max_diff_pair_skew_mm: 0.15
-max_switching_loop_area_mm2: 50.0
-min_gnd_overlap_ratio: 0.85
+
+# Rule-specific thresholds live under custom_rules (see section 4)
+custom_rules:
+  HEUR-DCDC-001:
+    max_loop_area_mm2: 30.0
+  HEUR-GND-001:
+    min_referenced_fraction: 0.9
 
 # Severity threshold for exit code 1
 fail_on: "CRITICAL"
@@ -193,43 +199,80 @@ custom_rules:
 
 ## 4. Configuration Parameters Reference
 
+Every key below is a real field of `InspectorConfig`. Unknown keys in a YAML file are
+reported as a warning and ignored, so a misspelt threshold is visible rather than silently
+falling back to its default. A file named with `--config` must exist; one that is not valid
+YAML, not a mapping, or holds a value of the wrong type stops the run with exit code `2`.
+
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `enable_drc` | `bool` | `true` | Run official KiCad Design Rules Check via `kicad-cli`. |
-| `enable_erc` | `bool` | `true` | Run official KiCad Electrical Rules Check via `kicad-cli`. |
-| `enable_heuristics` | `bool` | `true` | Run spatial layout engineering heuristics (Layer 2). |
-| `enable_vision` | `bool` | `false` | Run multimodal vision AI inspections (Layer 3). |
-| `max_decoupling_distance_mm` | `float` | `3.5` | Maximum Euclidean distance (in mm) between an IC power pin and its nearest decoupling capacitor. |
-| `min_power_trace_width_mm` | `float` | `0.35` | Minimum trace width (in mm) on recognized power rails (`VCC`, `+3V3`, `+5V`, `VDD`, etc.). |
-| `max_diff_pair_skew_mm` | `float` | `0.15` | Maximum trace length difference (in mm) between positive and negative traces of a differential pair (`_P`/`_N`, `+`/`-`). |
-| `max_switching_loop_area_mm2` | `float` | `50.0` | Maximum convex hull loop area (in mm²) between switching inductor, diode/FET, and input/output capacitors. |
-| `min_gnd_overlap_ratio` | `float` | `0.85` | Minimum fraction of signal trace length that must run directly over a continuous ground polygon. |
-| `vision_model` | `string` | `"gemini-3.8-flash"` | Vision LLM model identifier: `"gemini-3.8-flash"`, `"fable-5"`, `"gpt-6-astra"`, `"mock"`. |
+| `kicad_cli_path` | `string \| null` | `null` | Explicit path to `kicad-cli` when it is not on `PATH`. |
+| `enable_drc` | `bool` | `true` | Run KiCad's Design Rules Check via `kicad-cli`. |
+| `enable_erc` | `bool` | `true` | Run KiCad's Electrical Rules Check via `kicad-cli`. |
+| `enable_heuristics` | `bool` | `true` | Run the Layer 2 engineering heuristics. |
+| `enable_vision` | `bool` | `false` | Run the Layer 3 multimodal vision review. |
+| `require_kicad_cli` | `bool` | `false` | Report a missing `kicad-cli` as `CRITICAL` instead of `WARNING`. Recommended in CI. Also `--require-kicad-cli`. |
+| `max_decoupling_distance_mm` | `float` | `3.5` | Largest distance (mm) from an IC supply pin to its nearest bypass capacitor. Beyond 3.5x this, `CRITICAL`. |
+| `min_power_trace_width_mm` | `float` | `0.3` | Guideline minimum width (mm) for power rails. A trace below it that still matches its own net class is a `SUGGESTION`. |
+| `max_diff_pair_skew_mm` | `float` | `0.15` | Largest length mismatch (mm) within a differential pair. Above 1 mm, `CRITICAL`. |
+| `vision_model` | `string` | `"gemini-3.8-flash"` | `gemini-*`, `gpt-*`, `fable-5`, `fable-5.1`, `claude-*`, or `mock` for offline runs. |
 | `vision_api_key_env` | `string \| null` | `null` | Override for the variable holding the vision API key. When unset, each provider uses its own: `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY` (Claude also accepts an `ant auth login` profile). Claude requires `pip install 'pcb-inspector[claude]'`. |
-| `vision_cache_dir` | `string` | `".pcb_vision_cache"` | Cache directory storing model responses to eliminate redundant API billing. |
-| `fail_on` | `string` | `"CRITICAL"` | Finding severity that triggers non-zero exit code: `"CRITICAL"`, `"WARNING"`, `"SUGGESTION"`. |
-| `custom_rules` | `dict` | `{}` | Per-rule dictionary for toggling `enabled: true/false` and custom parameters. |
+| `vision_cache_dir` | `string` | `".pcb_vision_cache"` | Cache of vision responses, keyed on model, prompts, view and image bytes. |
+| `fail_on` | `string` | `"CRITICAL"` | Lowest severity that makes the run exit `1`: `CRITICAL`, `WARNING`, or `SUGGESTION`. |
+| `output_dir` | `string` | `"reports"` | Where reports go when `--format` is given without `--output`. |
+| `custom_rules` | `dict` | `{}` | Per-rule overrides, below. |
+
+### Per-rule overrides (`custom_rules`)
+
+Every rule accepts `enabled: false`. The keys below override that rule's threshold only.
+
+| Rule | Key | Default | Meaning |
+| :--- | :--- | :--- | :--- |
+| `HEUR-PWR-001` | `min_width_mm` | `min_power_trace_width_mm` | Power-rail width guideline for this rule. |
+| `HEUR-DIFF-001` | `max_skew_mm` | `max_diff_pair_skew_mm` | Allowed pair skew for this rule. |
+| `HEUR-DCDC-001` | `max_loop_area_mm2` | `30.0` | Largest switching-node hull area (mm²). |
+| `HEUR-GND-001` | `min_track_length_mm` | `5.0` | Segments shorter than this are not checked. |
+| `HEUR-GND-001` | `min_referenced_fraction` | `0.9` | Share of a segment that must lie over an adjacent ground plane. |
+| `VISION-AI-001` | `enabled` | `enable_vision` | Overrides the global vision switch either way. |
+
+```yaml
+custom_rules:
+  HEUR-GND-001:
+    enabled: false          # e.g. a two-layer test jig with no ground pour
+  HEUR-DCDC-001:
+    max_loop_area_mm2: 20.0
+```
 
 ---
 
 ## 5. Active Inspection Rules Catalog
 
+Run `pcb-inspector rules` for the live list; this table matches it.
+
 | Rule ID | Name | Category | Default Severity | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `KICAD-DRC-001` | KiCad DRC Checker | `MANUFACTURING_DFM` | `CRITICAL` | Executes `kicad-cli pcb drc` and parses standard KiCad clearance, overlap, and unrouted errors. |
-| `KICAD-ERC-001` | KiCad ERC Checker | `ELECTRICAL_SIGNAL` | `CRITICAL` | Executes `kicad-cli sch erc` and parses schematic electrical errors (floating pins, conflict nets). |
-| `HEUR-DEC-001` | Decoupling Capacitor Placement | `ELECTRICAL_SIGNAL` | `WARNING` | Checks proximity of bypass/decoupling capacitors to IC power pins within `max_decoupling_distance_mm`. |
-| `HEUR-PWR-001` | Power Rail Trace Width | `POWER_INTEGRITY` | `WARNING` | Verifies that traces on power nets meet or exceed `min_power_trace_width_mm` to prevent excessive IR drop. |
-| `HEUR-DIFF-001` | Differential Pair Skew & Length Matching | `SIGNAL_INTEGRITY` | `WARNING` | Calculates trace length skew between complementary differential pair nets (`_P`/`_N`, `+`/`-`). |
-| `HEUR-DCDC-001` | Switching Loop Area | `EMC_EMI` | `WARNING` | Computes the geometric loop area of high-di/dt switching nodes in DC-DC converters to minimize radiated EMI. |
-| `HEUR-GND-001` | Ground Return Path Continuity | `SIGNAL_INTEGRITY` | `WARNING` | Checks for continuous ground reference beneath high-speed signal tracks using polygon clipping. |
-| `VISION-AI-001` | Multimodal Visual Review | `VISION` | `WARNING` | Audits 2D PCB renders with vision AI for silkscreen polarity, Pin 1 indicators, acid traps, and mechanical edge collisions. |
+| `KICAD-DRC-ERC-001` | Native KiCad DRC/ERC Verification | `DRC_ERC` | `CRITICAL` | Runs `kicad-cli pcb drc` and `sch erc` and parses their violations. A missing `kicad-cli` or a failed run is itself reported, never read as a clean board. |
+| `HEUR-DEC-001` | Decoupling Capacitor Proximity | `DECOUPLING` | `WARNING` | Distance from each IC supply pin to its nearest bypass capacitor, plus board thickness for a capacitor on the opposite side. A rail with no capacitor at all is `CRITICAL`. |
+| `HEUR-PWR-001` | Power Rail Minimum Trace Width | `POWER_DELIVERY` | `WARNING` | One finding per net and layer. Narrower than the net's own net class: `WARNING`. Matching the net class but below the guideline: `SUGGESTION`. |
+| `HEUR-DIFF-001` | Differential Pair Length Matching (Skew) | `SIGNAL_INTEGRITY` | `WARNING` | Length mismatch for `_P/_N`, `+/-`, `_DP/_DM` and `H/L` pairs, counting arc tracks and via transitions. |
+| `HEUR-DCDC-001` | DC/DC Converter Switching Loop Area | `POWER_DELIVERY` | `WARNING` | Hull area of a switching node, confirmed by a declared `SW`/`LX` pin or by inductor-to-converter topology. |
+| `HEUR-GND-001` | Ground Return Plane Continuity | `SIGNAL_INTEGRITY` | `WARNING` | Share of each signal segment over a ground plane on an adjacent copper layer, or no ground plane at all. |
+| `VISION-AI-001` | Multimodal Visual Review | `VISION` | `WARNING` | Raytraced PNG of each side, reviewed separately, for polarity marks, Pin 1 indicators, silkscreen legibility, acid traps and edge clearance. |
+
+Finding categories: `DRC_ERC`, `DECOUPLING`, `POWER_DELIVERY`, `SIGNAL_INTEGRITY`, `THERMAL`,
+`PLACEMENT`, `SILKSCREEN`, `MECHANICAL`, `VISION`.
 
 ---
 
 ## 6. CI/CD & Automated Pipelines
 
 You can easily integrate `pcb-inspector` into GitHub Actions or GitLab CI to fail pull requests that introduce layout regressions.
+
+The simplest route is the bundled action, `uses: ./.github/actions/pcb-inspector`, which installs
+`kicad-cli` and runs with `--require-kicad-cli`. The workflow below does the same by hand.
+
+Exit codes: `0` passed, `1` findings at or above `--fail-on`, `2` usage or configuration error
+(the board was not checked).
 
 ### GitHub Actions Example:
 ```yaml
@@ -256,15 +299,25 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Layer 1 needs kicad-cli. Without it the audit reports DRC/ERC as not
+      # run, and with --require-kicad-cli the job fails instead of passing on
+      # heuristics alone.
+      - name: Install KiCad CLI
+        run: |
+          sudo add-apt-repository --yes ppa:kicad/kicad-9.0-releases
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends kicad-cli
+
       - name: Install pcb-inspector
-        run: uv pip install -e .
+        run: uv pip install --system .
 
       - name: Run PCB Inspector
         run: |
           pcb-inspector check hardware/mainboard.kicad_pcb \
             --format both \
             --output audit-report.md \
-            --fail-on WARNING
+            --fail-on WARNING \
+            --require-kicad-cli
 
       - name: Upload Audit Artifacts
         if: always()
@@ -274,6 +327,7 @@ jobs:
           path: |
             audit-report.md
             audit-report.json
+```
 
 ---
 

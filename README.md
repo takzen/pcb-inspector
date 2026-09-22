@@ -11,7 +11,7 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://github.com/takzen/pcb-inspector/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/Release-v0.1.0-blue?style=flat-square" alt="Release: v0.1.0"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-86%20passed%20%7C%2083%25-brightgreen?style=flat-square" alt="Tests: 86 passed"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-327%20passed%20%7C%2090%25-brightgreen?style=flat-square" alt="Tests: 327 passed"></a>
   <a href="https://kicad.org"><img src="https://img.shields.io/badge/KiCad-8.0%2B%20%7C%209.0%20%7C%2010-314CB6?style=flat-square&logo=kicad&logoColor=white" alt="KiCad Support"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="#-mcp-server--agentic-integration"><img src="https://img.shields.io/badge/MCP%20Server-Supported-5B5EA6?style=flat-square" alt="MCP Server"></a>
@@ -53,7 +53,16 @@ uv pip install pcb-inspector
 
 # Or install from source
 uv pip install "git+https://github.com/takzen/pcb-inspector.git"
+
+# Optional: Claude (Fable / Opus) as the vision model
+uv pip install "pcb-inspector[claude]"
 ```
+
+> [!IMPORTANT]
+> Layer 1 (DRC/ERC) and hosted vision renders both need **KiCad 8+** with `kicad-cli` on `PATH`
+> (or `kicad_cli_path` in the config). Without it, Layer 1 is reported as **not run** rather than
+> silently skipped; pass `--require-kicad-cli` to make that a failure, as the bundled GitHub
+> Action does.
 
 ### Essential CLI Commands
 
@@ -124,23 +133,39 @@ Runs KiCad's native verification tools through `kicad-cli`:
 ---
 
 ### 2. Programmatic Design Analysis
-Computes configurable spatial, geometric, and electrical heuristics directly from schematic and layout topology:
-- **Decoupling capacitor placement:** Proximity and loop inductance relative to IC power pins.
-- **Power & ground connectivity:** Star routing, plane integrity, and copper pour continuity.
-- **Switching regulators:** DC/DC converter high $di/dt$ switching-loop geometry and diode placement.
-- **High-current path analysis:** Trace width, copper weight, and via current capacity.
-- **Critical net routing:** Sensitive analog traces shielded from high-speed digital switching.
-- **Ground-plane & return paths:** Identification of return path interruptions and ground splits.
-- **Differential pairs:** Length tuning, skew matching, and continuous ground reference.
-- **Thermal relationships:** Proximity of heat-sensitive components to power dissipation hot spots.
+Five rules computed directly from the layout, reading the design intent KiCad records: net classes
+from the `.kicad_pro`, the copper stack order, and each pad's schematic pin name.
+
+- **Decoupling capacitor placement** (`HEUR-DEC-001`) — distance from every IC supply pin to its
+  nearest bypass capacitor, adding the board thickness for capacitors on the opposite side. Supply
+  pins are recognised by their schematic pin name (`VDD`, `VCC`, `3.3V`…) as well as the net name.
+- **Power rail trace width** (`HEUR-PWR-001`) — one finding per net and layer. A trace narrower
+  than **its own net class** is a warning; one that matches its net class but sits below the
+  configured power-rail guideline is a suggestion, since KiCad treats net class widths as defaults.
+- **Differential pair skew** (`HEUR-DIFF-001`) — length mismatch across `_P/_N`, `+/-`,
+  `_DP/_DM` and `H/L` pairs, counting curved (arc) routing and via transitions.
+- **Switching regulator loop area** (`HEUR-DCDC-001`) — switching nodes confirmed by a declared
+  `SW`/`LX` pin or by inductor-to-converter topology, never by net name alone.
+- **Ground reference** (`HEUR-GND-001`) — the share of each signal segment lying over a ground
+  plane on an **adjacent** copper layer, read from the board's physical stack order.
 
 > [!NOTE]
-> Rules and thresholds are configurable via YAML/JSON profiles, allowing the audit to adapt between high-power, RF, mixed-signal, and ultra-low-power designs.
+> Thresholds are configurable globally and per rule via `custom_rules` in YAML; any rule can be
+> disabled there. See [MANUAL.md](MANUAL.md) for every key.
+
+Not yet implemented, and listed in the [Roadmap](#️-roadmap--progress): thermal proximity of
+heat-sensitive parts to hot spots, analog/digital separation, copper-weight and via current
+capacity, and star-routing checks.
 
 ---
 
 ### 3. Multimodal Visual Review
-Uses Vision-capable models to inspect rendered **2D and 3D PCB views**, catching layout anti-patterns that resist formulation into rigid CAD rules:
+Each side of the board is raytraced to PNG with `kicad-cli pcb render` and reviewed in its own
+request by Gemini, OpenAI or Claude (Fable/Opus). The API key is read from the chosen provider's
+own variable — `GEMINI_API_KEY`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` — and use `--vision-model mock`
+to run offline. Hosted models need the `kicad-cli` render; the tool refuses to send them anything
+else rather than fail at the provider. Vision models catch layout anti-patterns that resist
+formulation into rigid CAD rules:
 - **Component placement:** Clustering balance, awkward orientations, and assembly congestion.
 - **Routing aesthetics & quality:** Unnecessary detours, awkward acute angles, and excessive vias.
 - **Silkscreen & DFM:** Overlapping silkscreens, unreadable reference designators, and obstructed testpoints.
@@ -255,7 +280,7 @@ When launched with `pcb-inspector mcp`, the server provides:
 - [x] KiCad 8 / 9 / 10 CLI automation wrappers (`kicad-cli`) & DRC/ERC JSON parsers
 - [x] Programmatic spatial & physical heuristics (decoupling, DC/DC loops, return paths, diff pairs, power traces)
 - [x] Multimodal vision inspection engine (Gemini Flash 3.8, Fable 5, GPT-6 Astra)
-- [x] Automated 2D SVG board renderer with top/bottom mirrored views & programmatic fallback
+- [x] Board renderer for vision review (superseded — see Unreleased)
 - [x] Built-in Model Context Protocol (MCP) Server (`pcb-inspector mcp`) for autonomous agent loops
 - [x] Konnect agentic closed-loop integration & `ActionableFix` auto-repair coordinates
 - [x] Continuous watch mode (`--watch`) for real-time iterative layout reviews
@@ -263,8 +288,24 @@ When launched with `pcb-inspector mcp`, the server provides:
 - [x] Reusable GitHub Action (`.github/actions/pcb-inspector`) for CI/CD pipelines
 - [x] Golden Sample reference benchmark boards (`clean_board` & `flawed_board`)
 
+### Unreleased — reliability and accuracy
+- [x] Never report a clean board for work not done: failed or missing `kicad-cli` is a finding,
+  every run records which layers executed, and the GitHub Action installs KiCad
+- [x] Parser reads curved (arc) tracks, multi-layer zones, net classes, the layer stack and pad
+  pin names; pad positions match `pcbnew` exactly
+- [x] Heuristics fixed for false positives on connectors, SWD/PHY nets and matched pairs, with
+  repair actions keyed to the rule that produced them
+- [x] Vision review works with hosted models: raytraced PNG per side via `kicad-cli pcb render`,
+  Claude through the Anthropic SDK with refusal fallbacks
+- [x] Findings correlation, ground-reference check and watch mode made fast enough for
+  26,000-track boards
+- [x] HTML report search and category filtering; smoke tests over KiCad's own demo boards
+
 ### Future Enhancements (v0.2.0+)
-- [ ] 3D raytraced photo-realistic board rendering via Blender / KiCad raytracer
+- [ ] Thermal rule: heat-sensitive parts near power dissipation hot spots
+- [ ] Analog/digital separation: analog traces crossing digital buses or plane splits
+- [ ] Via current capacity and copper-weight-aware trace width
+- [ ] Star-routing and ground-split checks
 - [ ] Direct Gerber (RS-274X) & Excellon drill file fabrication inspection
 - [ ] Automated IPC-2221 conductor spacing & current-carrying capacity calculator
 - [ ] Differential TDR waveform simulation for transmission lines
