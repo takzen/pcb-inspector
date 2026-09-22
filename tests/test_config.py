@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+import pytest
+
 from pcb_inspector.core.config import InspectorConfig
+from pcb_inspector.core.exceptions import ConfigError
 from pcb_inspector.core.models import Severity
 
 
@@ -37,9 +41,68 @@ def test_config_load_from_yaml(tmp_path: Path) -> None:
     assert cfg.enable_vision is True
 
 
-def test_config_load_missing_file_returns_default() -> None:
-    cfg = InspectorConfig.load(Path("non_existent_file_xyz.yaml"))
+def test_explicit_missing_config_raises() -> None:
+    """A named config that does not exist used to fall back to defaults silently,
+    auditing against thresholds the user had not chosen."""
+    with pytest.raises(ConfigError, match="not found"):
+        InspectorConfig.load(Path("non_existent_file_xyz.yaml"))
+
+
+def test_absent_discovered_config_still_means_defaults(tmp_path: Path, monkeypatch) -> None:
+    """Discovery is optional: no file found is not an error."""
+    monkeypatch.chdir(tmp_path)
+    cfg = InspectorConfig.load(project_dir=tmp_path)
     assert cfg.max_decoupling_distance_mm == 3.5
+
+
+def test_invalid_yaml_raises(tmp_path: Path) -> None:
+    bad = tmp_path / "c.yaml"
+    bad.write_text("max_decoupling_distance_mm: [unclosed", encoding="utf-8")
+    with pytest.raises(ConfigError, match="not valid YAML"):
+        InspectorConfig.load(bad)
+
+
+def test_non_mapping_yaml_raises(tmp_path: Path) -> None:
+    bad = tmp_path / "c.yaml"
+    bad.write_text("- just\n- a list\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="mapping"):
+        InspectorConfig.load(bad)
+
+
+def test_wrong_type_raises(tmp_path: Path) -> None:
+    bad = tmp_path / "c.yaml"
+    bad.write_text("max_decoupling_distance_mm: close\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="max_decoupling_distance_mm"):
+        InspectorConfig.load(bad)
+
+
+def test_unknown_key_is_reported_not_silently_dropped(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A misspelt threshold used to vanish and quietly become the default."""
+    cfg_file = tmp_path / "c.yaml"
+    cfg_file.write_text("max_decoupling_distanse_mm: 1.0\n", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        cfg = InspectorConfig.load(cfg_file)
+
+    assert cfg.max_decoupling_distance_mm == 3.5
+    assert "max_decoupling_distanse_mm" in caplog.text
+
+
+def test_empty_config_file_is_defaults(tmp_path: Path) -> None:
+    empty = tmp_path / "c.yaml"
+    empty.write_text("", encoding="utf-8")
+    assert InspectorConfig.load(empty).max_decoupling_distance_mm == 3.5
+
+
+def test_shipped_rules_yaml_loads_without_unknown_keys(caplog: pytest.LogCaptureFixture) -> None:
+    root = Path(__file__).parent.parent
+    for name in ("rules.yaml", ".pcb-inspector.yaml.example"):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            InspectorConfig.from_file(root / name)
+        assert "unknown setting" not in caplog.text, f"{name}: {caplog.text}"
 
 
 def test_config_load_project_dir_override(tmp_path: Path) -> None:

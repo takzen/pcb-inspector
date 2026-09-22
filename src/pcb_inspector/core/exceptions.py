@@ -23,3 +23,7 @@ class RuleExecutionError(PcbInspectorError):
 
 class VisionReviewError(PcbInspectorError):
     """Raised when visual multimodal analysis encounters an error or API failure."""
+
+
+class ConfigError(PcbInspectorError):
+    """Raised when a configuration file is missing, unreadable, or invalid."""

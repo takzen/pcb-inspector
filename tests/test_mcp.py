@@ -173,3 +173,25 @@ def test_mcp_server_prompts() -> None:
 
     import asyncio
     asyncio.run(_test())
+
+
+def test_mcp_missing_config_returns_an_error_payload(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from pathlib import Path
+
+    from pcb_inspector.mcp.tools import inspect_project_tool
+
+    board = Path(__file__).parent / "golden_samples" / "clean_board" / "clean_board.kicad_pcb"
+    out = inspect_project_tool(str(board), config_path=str(tmp_path / "missing.yaml"))
+    assert out["passed"] is False
+    assert "Configuration error" in out["error"]
+
+
+def test_mcp_invalid_fail_on_is_an_error_not_critical(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from pathlib import Path
+
+    from pcb_inspector.mcp.tools import inspect_project_tool
+
+    board = Path(__file__).parent / "golden_samples" / "clean_board" / "clean_board.kicad_pcb"
+    out = inspect_project_tool(str(board), fail_on="SOMETIMES")
+    assert out["passed"] is False
+    assert "Invalid fail_on" in out["error"]

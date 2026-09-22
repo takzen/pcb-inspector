@@ -24,6 +24,8 @@ if sys.platform == "win32":
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -34,6 +36,7 @@ from pcb_inspector import __version__
 from pcb_inspector.cli.watcher import watch_and_run
 from pcb_inspector.core.aggregator import FindingAggregator
 from pcb_inspector.core.config import InspectorConfig
+from pcb_inspector.core.exceptions import ConfigError
 from pcb_inspector.core.layers import evaluate_layer_status
 from pcb_inspector.core.models import AuditResult, Finding, FindingCategory, Severity
 from pcb_inspector.kicad.cli_wrapper import KiCadCli
@@ -122,7 +125,11 @@ _OUTPUT_OPT = typer.Option(
     None, "--output", "-o", help="File path to save the generated report"
 )
 _FORMAT_OPT = typer.Option(
-    "markdown", "--format", "-f", help="Report format: markdown, json, html, or all"
+    None,
+    "--format",
+    "-f",
+    help="Report format. Without --output, reports go to output_dir from the config.",
+    case_sensitive=False,
 )
 _FAIL_ON_OPT = typer.Option(
     "CRITICAL",
@@ -130,7 +137,13 @@ _FAIL_ON_OPT = typer.Option(
     help="Severity threshold causing non-zero exit code: CRITICAL, WARNING, SUGGESTION",
 )
 _CONFIG_OPT = typer.Option(
-    None, "--config", "-c", help="Path to custom configuration YAML file"
+    None,
+    "--config",
+    "-c",
+    help="Path to custom configuration YAML file",
+    exists=True,
+    dir_okay=False,
+    readable=True,
 )
 _REQUIRE_CLI_OPT = typer.Option(
     False,
@@ -155,7 +168,7 @@ class AuditRequest:
     categories: set[FindingCategory] | None
     banner: str
     output: Path | None
-    report_format: str
+    report_format: ReportFormat | None
     threshold: Severity
     config_file: Path | None
     watch: bool
@@ -175,7 +188,13 @@ def _run_audit(request: AuditRequest) -> None:
         target = request.project_path
         project_dir = target if target.is_dir() else target.parent
 
-        cfg = InspectorConfig.load(request.config_file, project_dir=project_dir)
+        try:
+            cfg = InspectorConfig.load(request.config_file, project_dir=project_dir)
+        except ConfigError as err:
+            # Exit 2, a usage error, distinct from exit 1 for a failed audit: a
+            # broken config means the board was never checked at all.
+            console.print(f"[bold red]Configuration error:[/bold red] {err}")
+            raise typer.Exit(code=2) from None
         cfg.fail_on = request.threshold
         request.overrides(cfg)
 
@@ -193,7 +212,10 @@ def _run_audit(request: AuditRequest) -> None:
             duration=time.perf_counter() - start_time,
             threshold=request.threshold,
         )
-        return _save_and_display_result(result, request.output, request.report_format)
+        output, fmt = _resolve_output(
+            request.output, request.report_format, cfg.output_dir, target
+        )
+        return _save_and_display_result(result, output, fmt)
 
     if request.watch:
         console.print(
@@ -207,31 +229,79 @@ def _run_audit(request: AuditRequest) -> None:
         raise typer.Exit(code=1)
 
 
+class ReportFormat(str, Enum):
+    """Report file formats accepted by --format.
+
+    An Enum makes Typer reject anything else with a usage error. As a plain
+    string, `-f pdf` was accepted, matched no branch, and wrote nothing.
+    """
+
+    markdown = "markdown"
+    md = "md"
+    json = "json"
+    html = "html"
+    both = "both"  # markdown + json
+    all = "all"  # markdown + json + html
+
+
+#: (format, reporter factory, file suffix) in the order files are written.
+_WRITERS: tuple[tuple[str, Callable[[], Any], str], ...] = (
+    ("json", JsonReporter, ".json"),
+    ("markdown", MarkdownReporter, ".md"),
+    ("html", HtmlReporter, ".html"),
+)
+
+_FORMATS_WRITTEN: dict[ReportFormat, frozenset[str]] = {
+    ReportFormat.markdown: frozenset({"markdown"}),
+    ReportFormat.md: frozenset({"markdown"}),
+    ReportFormat.json: frozenset({"json"}),
+    ReportFormat.html: frozenset({"html"}),
+    ReportFormat.both: frozenset({"markdown", "json"}),
+    ReportFormat.all: frozenset({"markdown", "json", "html"}),
+}
+
+
+def _resolve_output(
+    output: Path | None,
+    report_format: ReportFormat | None,
+    output_dir: str,
+    project_path: Path,
+) -> tuple[Path | None, ReportFormat]:
+    """Decide where reports go and in which format.
+
+    `-f` without `-o` used to write nothing and say nothing. It now writes to
+    the configured output_dir, which is also the first thing that setting has
+    ever done: it was declared and documented but read by nothing.
+    """
+    fmt = report_format or ReportFormat.markdown
+    if output is not None:
+        return output, fmt
+    if report_format is None:
+        return None, fmt
+    return Path(output_dir) / f"{project_path.stem}_report", fmt
+
+
 def _save_and_display_result(
     result: AuditResult,
     output: Path | None,
-    report_format: str,
+    report_format: ReportFormat | str,
 ) -> bool:
     """Render terminal summary and write output files if requested."""
     terminal_reporter = TerminalReporter(console=console)
     terminal_reporter.print_result(result)
 
     if output:
-        fmt = report_format.lower()
-        if fmt in ("json", "both", "all"):
-            json_path = output if fmt == "json" else output.with_suffix(".json")
-            JsonReporter().write_to_file(result, json_path)
-            console.print(f"Saved JSON report to: [green]{json_path}[/green]")
-
-        if fmt in ("markdown", "md", "both", "all"):
-            md_path = output if fmt in ("markdown", "md") else output.with_suffix(".md")
-            MarkdownReporter().write_to_file(result, md_path)
-            console.print(f"Saved Markdown report to: [green]{md_path}[/green]")
-
-        if fmt in ("html", "all"):
-            html_path = output if fmt == "html" else output.with_suffix(".html")
-            HtmlReporter().write_to_file(result, html_path)
-            console.print(f"Saved HTML report to: [green]{html_path}[/green]")
+        fmt = ReportFormat(report_format)
+        wanted = _FORMATS_WRITTEN[fmt]
+        single = len(wanted) == 1
+        for name, reporter, suffix in _WRITERS:
+            if name not in wanted:
+                continue
+            # A single format writes exactly the path given; several share its stem.
+            path = output if single else output.with_suffix(suffix)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            reporter().write_to_file(result, path)
+            console.print(f"Saved {name.upper() if name != 'markdown' else 'Markdown'} report to: [green]{path}[/green]")
 
     return result.summary.passed
 
@@ -293,7 +363,7 @@ def rules() -> None:
 def check(
     project_path: Path = _PROJECT_ARG,
     output: Path | None = _OUTPUT_OPT,
-    report_format: str = _FORMAT_OPT,
+    report_format: ReportFormat | None = _FORMAT_OPT,
     fail_on: str = _FAIL_ON_OPT,
     config_file: Path | None = _CONFIG_OPT,
     enable_vision: bool | None = typer.Option(
@@ -338,7 +408,7 @@ def check(
 def drc(
     project_path: Path = _PROJECT_ARG,
     output: Path | None = _OUTPUT_OPT,
-    report_format: str = _FORMAT_OPT,
+    report_format: ReportFormat | None = _FORMAT_OPT,
     fail_on: str = _FAIL_ON_OPT,
     config_file: Path | None = _CONFIG_OPT,
     require_kicad_cli: bool = _REQUIRE_CLI_OPT,
@@ -369,7 +439,7 @@ def drc(
 def analyze(
     project_path: Path = _PROJECT_ARG,
     output: Path | None = _OUTPUT_OPT,
-    report_format: str = _FORMAT_OPT,
+    report_format: ReportFormat | None = _FORMAT_OPT,
     fail_on: str = _FAIL_ON_OPT,
     config_file: Path | None = _CONFIG_OPT,
     watch: bool = _WATCH_OPT,
@@ -393,7 +463,7 @@ def analyze(
 def vision(
     project_path: Path = _PROJECT_ARG,
     output: Path | None = _OUTPUT_OPT,
-    report_format: str = _FORMAT_OPT,
+    report_format: ReportFormat | None = _FORMAT_OPT,
     vision_model: str = typer.Option(
         "gemini-3.8-flash",
         "--model",

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
+from pcb_inspector.core.exceptions import ConfigError
 from pcb_inspector.core.models import Severity
+
+logger = logging.getLogger(__name__)
 
 
 class InspectorConfig(BaseModel):
@@ -94,12 +98,13 @@ class InspectorConfig(BaseModel):
         4. Built-in defaults
         """
         if config_path is not None:
+            # A path the user named must exist. Falling back to defaults here
+            # meant a typo in --config silently audited against the built-in
+            # thresholds while the user believed their own were in force.
             path = Path(config_path)
-            if path.exists():
-                with open(path, encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
-                return cls(**data)
-            return cls()
+            if not path.is_file():
+                raise ConfigError(f"Configuration file not found: {path}")
+            return cls.from_file(path)
 
         candidates: list[Path] = []
         if project_dir is not None:
@@ -110,10 +115,49 @@ class InspectorConfig(BaseModel):
         for name in (".pcb-inspector.yaml", ".pcb-inspector.yml", "pcb-inspector.yaml", "rules.yaml", "rules.yml"):
             candidates.append(Path(name))
 
+        # Discovered files are optional, so absence falls through to defaults;
+        # a discovered file that is present but broken still raises.
         for candidate in candidates:
-            if candidate.exists() and candidate.is_file():
-                with open(candidate, encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
-                return cls(**data)
+            if candidate.is_file():
+                return cls.from_file(candidate)
 
         return cls()
+
+    @classmethod
+    def from_file(cls, path: Path) -> InspectorConfig:
+        """Parse one YAML configuration file.
+
+        Raises:
+            ConfigError: If the file is unreadable, not YAML, not a mapping, or
+                holds values of the wrong type.
+        """
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except OSError as err:
+            raise ConfigError(f"Cannot read configuration file {path}: {err}") from err
+        except yaml.YAMLError as err:
+            raise ConfigError(f"Configuration file {path} is not valid YAML: {err}") from err
+
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            raise ConfigError(
+                f"Configuration file {path} must contain a mapping of settings, "
+                f"not a {type(data).__name__}."
+            )
+
+        # Unknown keys are reported rather than rejected, so a config written
+        # for a newer version still loads. They used to vanish silently, which
+        # turned a misspelt threshold into the default without a word.
+        unknown = sorted(set(data) - set(cls.model_fields))
+        if unknown:
+            logger.warning(
+                "Ignoring unknown setting(s) in %s: %s", path, ", ".join(map(str, unknown))
+            )
+            data = {k: v for k, v in data.items() if k in cls.model_fields}
+
+        try:
+            return cls(**data)
+        except ValidationError as err:
+            raise ConfigError(f"Invalid configuration in {path}:\n{err}") from err

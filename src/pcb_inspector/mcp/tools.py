@@ -9,6 +9,7 @@ from typing import Any
 from pcb_inspector import __version__
 from pcb_inspector.core.aggregator import FindingAggregator
 from pcb_inspector.core.config import InspectorConfig
+from pcb_inspector.core.exceptions import ConfigError
 from pcb_inspector.core.layers import evaluate_layer_status, incomplete_layers
 from pcb_inspector.core.models import AuditResult, Severity
 from pcb_inspector.rules.decoupling import DecouplingProximityRule
@@ -39,6 +40,20 @@ def _serialize_finding(finding: Any) -> dict[str, Any]:
         ),
         "correlated_with": getattr(finding, "correlated_with", []),
     }
+
+
+
+def _load_config(config_path: str | None, project_dir: Path) -> InspectorConfig | dict[str, Any]:
+    """Load config for a tool call, or an error payload the agent can read.
+
+    A missing or invalid config used to either raise out of the tool or, for a
+    missing file, silently fall back to defaults. An agent then repaired the
+    board against thresholds nobody had chosen.
+    """
+    try:
+        return InspectorConfig.load(Path(config_path) if config_path else None, project_dir=project_dir)
+    except ConfigError as err:
+        return {"error": f"Configuration error: {err}", "passed": False, "findings": []}
 
 
 def inspect_project_tool(
@@ -74,10 +89,18 @@ def inspect_project_tool(
     try:
         threshold = Severity(fail_on.upper())
     except ValueError:
-        threshold = Severity.CRITICAL
+        # Silently substituting CRITICAL would pass a run the caller meant to fail.
+        return {
+            "error": f"Invalid fail_on '{fail_on}'. Use CRITICAL, WARNING, or SUGGESTION.",
+            "passed": False,
+            "findings": [],
+        }
 
     project_dir = p if p.is_dir() else p.parent
-    cfg = InspectorConfig.load(Path(config_path) if config_path else None, project_dir=project_dir)
+    loaded = _load_config(config_path, project_dir)
+    if isinstance(loaded, dict):
+        return loaded
+    cfg = loaded
     cfg.fail_on = threshold
     cfg.enable_vision = enable_vision
     cfg.vision_model = vision_model
@@ -137,7 +160,10 @@ def check_decoupling_tool(
         return {"error": f"Path '{pcb_path}' does not exist.", "passed": False, "findings": []}
 
     project_dir = p if p.is_dir() else p.parent
-    cfg = InspectorConfig.load(Path(config_path) if config_path else None, project_dir=project_dir)
+    loaded = _load_config(config_path, project_dir)
+    if isinstance(loaded, dict):
+        return loaded
+    cfg = loaded
     cfg.max_decoupling_distance_mm = max_distance_mm
 
     rule = DecouplingProximityRule()
@@ -175,7 +201,10 @@ def run_drc_tool(
         return {"error": f"Path '{pcb_path}' does not exist.", "passed": False, "findings": []}
 
     project_dir = p if p.is_dir() else p.parent
-    cfg = InspectorConfig.load(Path(config_path) if config_path else None, project_dir=project_dir)
+    loaded = _load_config(config_path, project_dir)
+    if isinstance(loaded, dict):
+        return loaded
+    cfg = loaded
 
     rule = KiCadDrcErcRule()
     raw_findings = rule.evaluate(context=p, config=cfg)

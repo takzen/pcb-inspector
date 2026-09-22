@@ -173,3 +173,59 @@ def test_vision_runs_through_the_registry_and_records_its_layer() -> None:
     layers = payload["metadata"]["layers"]
     assert layers["layer3_vision"] == "executed"
     assert layers["layer1_drc_erc"] == "disabled"
+
+
+# --------------------------------------------------------------------------
+# P3-1 / P3-2: formats and config errors are reported, not swallowed
+# --------------------------------------------------------------------------
+
+CLEAN = Path(__file__).parent / "golden_samples" / "clean_board" / "clean_board.kicad_pcb"
+
+
+def test_unknown_report_format_is_rejected(tmp_path: Path) -> None:
+    """`-f pdf` used to be accepted and write nothing."""
+    result = runner.invoke(app, ["analyze", str(CLEAN), "-o", str(tmp_path / "r"), "-f", "pdf"])
+    assert result.exit_code == 2
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_format_without_output_writes_to_output_dir(tmp_path: Path, monkeypatch) -> None:
+    """`-f html` alone used to write nothing and say nothing."""
+    cfg = tmp_path / "c.yaml"
+    out_dir = tmp_path / "reports"
+    cfg.write_text(f"output_dir: '{out_dir.as_posix()}'\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["analyze", str(CLEAN), "-f", "html", "-c", str(cfg)])
+
+    assert result.exit_code == 0, result.stdout
+    written = list(out_dir.iterdir())
+    assert [p.name for p in written] == ["clean_board_report"]
+    assert "<html" in written[0].read_text(encoding="utf-8").lower()
+
+
+def test_no_format_and_no_output_writes_nothing(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["analyze", str(CLEAN)])
+    assert result.exit_code == 0
+    assert not (tmp_path / "reports").exists()
+
+
+def test_format_is_case_insensitive(tmp_path: Path) -> None:
+    out = tmp_path / "r.json"
+    result = runner.invoke(app, ["analyze", str(CLEAN), "-o", str(out), "-f", "JSON"])
+    assert result.exit_code == 0
+    assert json.loads(out.read_text(encoding="utf-8"))["summary"]
+
+
+def test_missing_config_file_is_a_usage_error(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["analyze", str(CLEAN), "-c", str(tmp_path / "nope.yaml")])
+    assert result.exit_code == 2
+
+
+def test_broken_config_file_exits_2_not_1(tmp_path: Path) -> None:
+    """A broken config means nothing was checked; that must not read as a failed audit."""
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("- not\n- a mapping\n", encoding="utf-8")
+    result = runner.invoke(app, ["analyze", str(CLEAN), "-c", str(cfg)])
+    assert result.exit_code == 2
+    assert "Configuration error" in result.stdout
