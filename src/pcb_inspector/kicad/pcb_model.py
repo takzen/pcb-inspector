@@ -55,13 +55,55 @@ def net_tokens(name: str) -> set[str]:
     return {t for t in _NET_TOKEN_RE.split(normalize_net(name)) if t}
 
 
-#: Net-name fragments that suggest a supply rail. Substrings rather than whole
-#: tokens, because auto-generated names such as Net-(J1-VCC) embed them.
-_POWER_NET_FRAGMENTS = (
-    "VCC", "VDD", "VBUS", "VBAT", "VIN", "VOUT",
-    "+3V3", "+5V", "+12V", "3V3", "5V",
-    "GND", "AGND", "DGND",
+#: Splits a net name into tokens that keep a voltage whole: "+3.3V_PROBE" ->
+#: [+3.3V, PROBE], "USB.VBUS" -> [USB, VBUS]. A dot or comma splits only when
+#: it is not a decimal separator.
+_RAIL_TOKEN_SPLIT_RE = re.compile(r"[^A-Z0-9.,+]+|(?<![0-9])[.,]|[.,](?![0-9])")
+#: A token naming a supply: VCC, VDDA, AVCC, VCCIO, VBUS, VIN, VBAT+.
+_SUPPLY_TOKEN_RE = re.compile(r"^[APDV]?(?:VCC|VDD|VBUS|VBAT|VIN|VOUT|VSYS)[A-Z0-9]*\+?$")
+#: A voltage the way rails are named: 3V3, 1V8, P3V3, 5V, +12V, +3.3V, +5VUSB.
+_VOLTAGE_TOKEN_RE = re.compile(r"^\+?P?\d+(?:[.,]\d+)?V[A-Z0-9]*$")
+#: The 3V3 / 1V8 spelling, with V as the decimal point, is used for rails
+#: almost exclusively, so it names one wherever it appears: M2_3V3, VIO_1V8.
+_RKM_VOLTAGE_TOKEN_RE = re.compile(r"^\+?P?\d+V\d+$")
+#: Qualifiers that make a net a reference, bias or measurement point rather
+#: than a supply, whatever voltage or supply name it also carries.
+_NON_RAIL_TOKENS = frozenset(
+    {"BIAS", "REF", "VREF", "VMID", "MID", "SENSE", "SNS", "FB", "MON", "DIV"}
 )
+#: Words that make a trailing voltage a rail: USB_5V, SYS_3V3, AUX_12V.
+_RAIL_CONTEXT_TOKENS = frozenset(
+    {"PWR", "POWER", "SUPPLY", "RAIL", "USB", "SYS", "MAIN", "AUX", "EXT", "BAT", "BATT"}
+)
+
+
+def is_supply_net(name: str) -> bool:
+    """True if a net name reads as a supply rail.
+
+    Tokens rather than substrings: matching the substring "5V" classed
+    BIAS_1.65V, an op-amp bias node, as a rail, while +3.3V_PROBE_AN, a real
+    one, matched nothing. A voltage names a rail when it leads the name (+3V3,
+    5V_USB), carries the "+" of KiCad's power symbols, is spelled 3V3-style
+    (M2_3V3), or stands beside a rail word (USB_5V). Anywhere else it tends to
+    describe a signal, such as a control input spanning Vpil_0_3,3V. Ground is
+    not excluded here; callers check it first.
+    """
+    upper = normalize_net(name)
+    if upper.startswith("UNCONNECTED-"):
+        # KiCad's name for a no-connect pin's net, e.g. unconnected-(BUS1--12V-Pad7).
+        return False
+    leaf = upper.rsplit("/", 1)[-1]
+    tokens = [t for t in _RAIL_TOKEN_SPLIT_RE.split(leaf) if t]
+    if not tokens or not _NON_RAIL_TOKENS.isdisjoint(tokens):
+        return False
+    if any(_SUPPLY_TOKEN_RE.match(t) for t in tokens):
+        return True
+    voltages = [i for i, t in enumerate(tokens) if _VOLTAGE_TOKEN_RE.match(t)]
+    return bool(voltages) and (
+        voltages[0] == 0
+        or any(tokens[i].startswith("+") or _RKM_VOLTAGE_TOKEN_RE.match(tokens[i]) for i in voltages)
+        or not _RAIL_CONTEXT_TOKENS.isdisjoint(tokens)
+    )
 
 #: Pin function names denoting ground and supply pins. KiCad copies these from
 #: the schematic symbol, so they state the designer's intent outright rather
@@ -70,7 +112,9 @@ _PIN_GROUND_RE = re.compile(r"^(?:A|D|P|)(?:GND|VSS)[A-Z0-9_]*$|GROUND", re.IGNO
 _PIN_POWER_RE = re.compile(
     r"^(?:[APV]?(?:VCC|VDD|VBUS|VBAT|VIN|VOUT|VSYS|VREF)[A-Z0-9_]*"
     r"|\+?\d+[.,]?\d*\s*[Vv][A-Za-z0-9_()+\-]*"
-    r"|\d+[Vv]\d+[A-Z0-9_]*)$",
+    r"|\d+[Vv]\d+[A-Z0-9_]*"
+    # Amplifier supplies: +VS, +_VS, -VS, VS+, V+, V-, VEE.
+    r"|[+\-]?_?VS[+\-]?|V[+\-]|VEE)$",
     re.IGNORECASE,
 )
 
@@ -122,7 +166,7 @@ class Pad(BaseModel):
         if function and _PIN_POWER_RE.match(function):
             return True
 
-        return any(frag in normalize_net(self.net_name) for frag in _POWER_NET_FRAGMENTS)
+        return is_supply_net(self.net_name)
 
 
 class Footprint(BaseModel):

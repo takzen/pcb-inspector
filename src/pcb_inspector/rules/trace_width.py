@@ -6,7 +6,7 @@ from typing import Any
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import Coordinate, Finding, FindingCategory, Severity
-from pcb_inspector.kicad.pcb_model import PcbBoard, TrackSegment, net_tokens
+from pcb_inspector.kicad.pcb_model import PcbBoard, TrackSegment, is_supply_net, net_tokens
 from pcb_inspector.rules.base import BaseRule
 from pcb_inspector.rules.board_loader import resolve_board
 
@@ -23,33 +23,14 @@ class PowerTraceWidthRule(BaseRule):
         "IR voltage drop, parasitic trace resistance, and localized Joule heating."
     )
 
-    #: Matched against whole tokens of a net name. "+3V3" tokenizes to {3V3},
-    #: "VDD_CORE" to {VDD, CORE}.
-    POWER_NET_KEYWORDS = frozenset(
-        {
-            "VCC",
-            "VDD",
-            "VBUS",
-            "VBAT",
-            "VIN",
-            "VOUT",
-            "VSYS",
-            "3V3",
-            "5V",
-            "12V",
-            "24V",
-            "1V8",
-            "2V5",
-        }
-    )
-
     @classmethod
     def _is_power_net(cls, net_name: str) -> bool:
-        tokens = net_tokens(net_name)
-        if "GND" in tokens:
+        if "GND" in net_tokens(net_name):
             # Ground is normally poured as a zone, not routed as a track.
             return False
-        return bool(tokens & cls.POWER_NET_KEYWORDS)
+        # Shared with the decoupling rule. A fixed keyword list here missed
+        # every rail written with a decimal point, such as +3.3V.
+        return is_supply_net(net_name)
 
     def evaluate(self, context: Any, config: InspectorConfig) -> list[Finding]:
         findings: list[Finding] = []

@@ -538,3 +538,151 @@ def test_correlation_stays_linear_enough_to_finish() -> None:
     start = time.perf_counter()
     FindingAggregator().aggregate(findings)
     assert time.perf_counter() - start < 5.0
+
+
+
+# --------------------------------------------------------------------------
+# Found on a real KiCad 10 board: an analog metal-detector probe with
+# ADA4841-2 op-amps, a BIAS_1.65V mid-rail net and a +3.3V_PROBE_AN rail
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("net", "supply"),
+    [
+        ("+3.3V_PROBE_AN", True),
+        ("+3.3V", True),
+        ("+3V3", True),
+        ("P3V3", True),
+        ("USB_5V", True),
+        ("+12V", True),
+        ("-5V", True),
+        ("VDD_CORE", True),
+        ("AVCC", True),
+        ("/VCC_PROBE", True),
+        ("Net-(J1-VCC)", True),
+        # "5V" used to match inside "1.65V".
+        ("BIAS_1.65V", False),
+        ("VREF_2V5", False),
+        ("VDD_SENSE", False),
+        # "VIN" used to match inside "DRIVING".
+        ("LED_DRIVING", False),
+        ("Net-(U5-OUT)", False),
+        ("Net-(FB1-Pad1)", False),
+        ("SWCLK", False),
+        # Net names from KiCad's own demos, where the first token-based
+        # version of this check got them wrong.
+        ("+5VUSB", True),
+        ("+5VBAT", True),
+        ("/Battery_holder/VBAT+", True),
+        ("/Debugger/USB.VBUS", True),
+        ("/xilinx/+3,3V_OUT", True),
+        ("VSYS", True),
+        ("M2_3V3", True),
+        ("/12Vext", True),
+        ("/ampli_ht_vertical/Vpil_0_3,3V", False),
+        ("unconnected-(BUS1--12V-Pad7)", False),
+        ("/VCC_SENSE-ERROR*", False),
+        ("Net-(U1-VBUS_SENSE)", False),
+    ],
+)
+def test_supply_net_classification(net: str, supply: bool) -> None:
+    from pcb_inspector.kicad.pcb_model import is_supply_net
+
+    assert is_supply_net(net) is supply
+
+
+def _opamp(refdes: str, x: float, pins: dict[str, tuple[str, str]]) -> Footprint:
+    """An SO-8 op-amp whose pads carry (pin function, net)."""
+    return Footprint(
+        refdes=refdes,
+        at_x=x,
+        at_y=0,
+        pads=[
+            Pad(number=num, at_x=x, at_y=0, net_name=net, pin_function=fn, layers=["F.Cu"])
+            for num, (fn, net) in pins.items()
+        ],
+    )
+
+
+def test_opamp_bias_pins_are_not_supply_pins_but_its_supply_pin_is() -> None:
+    """The bias buffer's output and inputs were flagged CRITICAL for missing
+    decoupling, while the real supply pin on +3.3V_PROBE_AN was never checked."""
+    u2 = _opamp(
+        "U2",
+        0,
+        {
+            "1": ("OUT_1", "BIAS_1.65V"),
+            "2": ("-IN_1", "BIAS_1.65V"),
+            "4": ("-VS", "GND_PROBE"),
+            "5": ("+_IN_2", "BIAS_1.65V"),
+            "8": ("+_VS", "+3.3V_PROBE_AN"),
+        },
+    )
+    far_cap = Footprint(
+        refdes="C4",
+        at_x=10,
+        at_y=0,
+        pads=[_pad("+3.3V_PROBE_AN", x=10), _pad("GND_PROBE", x=11, num="2")],
+    )
+    board = PcbBoard(
+        file_path="x",
+        nets={1: "BIAS_1.65V", 2: "GND_PROBE", 3: "+3.3V_PROBE_AN"},
+        footprints={"U2": u2, "C4": far_cap},
+    )
+
+    findings = DecouplingProximityRule().evaluate(board, InspectorConfig())
+    assert [f.id for f in findings] == ["DEC-DIST-U2-C4-8"]
+    assert findings[0].severity is Severity.WARNING
+
+
+def test_power_trace_width_recognises_rails_written_with_a_decimal_point() -> None:
+    track = TrackSegment(
+        start_x=0, start_y=0, end_x=10, end_y=0, width=0.1,
+        layer="F.Cu", net_num=1, net_name="+3.3V_PROBE",
+    )
+    board = PcbBoard(file_path="x", nets={1: "+3.3V_PROBE"}, tracks=[track])
+
+    findings = PowerTraceWidthRule().evaluate(board, InspectorConfig())
+    assert [f.nets for f in findings] == [["+3.3V_PROBE"]]
+
+
+def _pair_board(p: str, n: str, len_p: float, len_n: float) -> PcbBoard:
+    return PcbBoard(
+        file_path="x",
+        nets={1: p, 2: n},
+        tracks=[
+            TrackSegment(
+                start_x=0, start_y=0, end_x=len_p, end_y=0, width=0.25,
+                layer="F.Cu", net_num=1, net_name=p,
+            ),
+            TrackSegment(
+                start_x=0, start_y=1, end_x=len_n, end_y=1, width=0.25,
+                layer="F.Cu", net_num=2, net_name=n,
+            ),
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    ("p", "n", "severity"),
+    [
+        # A coil signal read at kHz: 7 mm is picoseconds there.
+        ("RX_S_P", "RX_S_N", Severity.SUGGESTION),
+        ("CAN_H", "CAN_L", Severity.SUGGESTION),
+        ("ADC_INP", "ADC_INN", Severity.SUGGESTION),
+        ("USB_DP", "USB_DM", Severity.CRITICAL),
+        ("D+", "D-", Severity.CRITICAL),
+        # Hierarchical and hub-port spellings from KiCad's demos.
+        ("/Debugger/D+", "/Debugger/D-", Severity.CRITICAL),
+        ("/U2D+", "/U2D-", Severity.CRITICAL),
+        ("/HDMI_D0_P", "/HDMI_D0_N", Severity.CRITICAL),
+        ("PCIE_TX0_P", "PCIE_TX0_N", Severity.CRITICAL),
+        ("LANE0_TXP", "LANE0_TXN", Severity.CRITICAL),
+        ("REFCLK_P", "REFCLK_N", Severity.CRITICAL),
+    ],
+)
+def test_skew_severity_follows_what_the_pair_is(p: str, n: str, severity: Severity) -> None:
+    findings = DifferentialPairSkewRule().evaluate(_pair_board(p, n, 45.3, 52.4), InspectorConfig())
+    assert len(findings) == 1
+    assert findings[0].severity is severity

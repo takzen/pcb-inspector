@@ -11,7 +11,7 @@ from shapely.ops import unary_union
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import Coordinate, Finding, FindingCategory, Severity
-from pcb_inspector.kicad.pcb_model import PcbBoard, TrackSegment, net_tokens
+from pcb_inspector.kicad.pcb_model import PcbBoard, TrackSegment, is_supply_net, net_tokens
 from pcb_inspector.rules.base import BaseRule
 from pcb_inspector.rules.board_loader import resolve_board
 
@@ -38,8 +38,10 @@ class GroundPlaneIntegrityRule(BaseRule):
     #: the segment's endpoints, where it meets pads.
     MIN_REFERENCED_FRACTION = 0.9
 
-    #: Net name tokens whose return path is not provided by a plane below them.
-    _SKIP_TOKENS = frozenset({"GND", "AGND", "DGND", "VCC", "VDD"})
+    #: Ground net tokens. Ground and supply rails are skipped: their return
+    #: path is not a plane below them. Rails are recognised by is_supply_net;
+    #: a token list of its own here skipped VCC and VDD but checked +3V3.
+    _GROUND_TOKENS = frozenset({"GND", "AGND", "DGND"})
 
     @staticmethod
     def _reference_layers(
@@ -108,7 +110,11 @@ class GroundPlaneIntegrityRule(BaseRule):
         unreferenced: list[TrackSegment] = []
 
         for t in board.tracks:
-            if t.length < min_length or net_tokens(t.net_name) & self._SKIP_TOKENS:
+            if (
+                t.length < min_length
+                or net_tokens(t.net_name) & self._GROUND_TOKENS
+                or is_supply_net(t.net_name)
+            ):
                 continue
 
             candidates = self._reference_layers(board, t.layer, zone_layers)

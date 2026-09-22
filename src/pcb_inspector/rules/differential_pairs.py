@@ -6,7 +6,7 @@ from typing import Any
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import Coordinate, Finding, FindingCategory, Severity
-from pcb_inspector.kicad.pcb_model import PcbBoard, TrackSegment, normalize_net
+from pcb_inspector.kicad.pcb_model import PcbBoard, TrackSegment, net_tokens, normalize_net
 from pcb_inspector.rules.base import BaseRule
 from pcb_inspector.rules.board_loader import resolve_board
 
@@ -27,6 +27,33 @@ DIFF_PAIR_SUFFIXES: tuple[tuple[str, str], ...] = (
     ("P", "N"),
     ("H", "L"),
 )
+
+#: Base-name tokens of interfaces whose edges are fast enough for millimetres
+#: of skew to matter. A token matches when it starts with one of these, so
+#: PCIE_TX0 and USB3 count; a prefix rather than a substring keeps ADDR from
+#: reading as DDR. Clocks are matched anywhere: REFCLK, SYSCLK, CLK100M.
+HIGH_SPEED_TOKENS: tuple[str, ...] = (
+    "USB", "HDMI", "TMDS", "PCIE", "SATA", "LVDS", "MIPI", "CSI", "DSI",
+    "ETH", "MDI", "RGMII", "SGMII", "SERDES", "DDR", "SFP",
+)
+#: Suffixes that name a fast pair outright: serial transceiver lanes, and USB's
+#: D+/D- and DP/DM, which hubs write as /U2D+ without the word USB.
+HIGH_SPEED_SUFFIXES: tuple[str, ...] = (
+    "_TXP", "_TXN", "_RXP", "_RXN", "D+", "D-", "DP", "DM",
+)
+
+
+def is_high_speed_pair(base: str, net_name: str) -> bool:
+    """True if a pair's naming identifies an interface where skew matters.
+
+    Skew only matters relative to edge rate: 7 mm is about 45 ps, a real
+    defect on USB and irrelevant on a CAN bus or a sensor coil read at kHz.
+    The rule cannot see edge rates, so it trusts naming.
+    """
+    if net_name.upper().endswith(HIGH_SPEED_SUFFIXES):
+        return True
+    return any(t.startswith(HIGH_SPEED_TOKENS) or "CLK" in t for t in net_tokens(base))
+
 
 def _min_base_len(suffix: str) -> int:
     """Shortest base name accepted for a given suffix.
@@ -131,12 +158,34 @@ class DifferentialPairSkewRule(BaseRule):
                 sample_track = tracks_p[0]
                 coord = Coordinate(x=sample_track.start_x, y=sample_track.start_y, layer=sample_track.layer)
 
-                sev = Severity.CRITICAL if skew > 1.0 else Severity.WARNING
+                high_speed = is_high_speed_pair(base, net_p)
+                if high_speed:
+                    sev = Severity.CRITICAL if skew > 1.0 else Severity.WARNING
+                    title = f"Differential pair skew on '{base}' ({skew:.2f} mm mismatch)"
+                    recommendation = (
+                        f"Apply length tuning (meanders/serpentines) to shorter net '{shorter_net}' "
+                        f"to add {skew:.2f} mm and achieve skew < {max_skew:.2f} mm."
+                    )
+                else:
+                    # Nothing in the name says this pair is fast. A CAN bus or
+                    # an analog sensor pair was reported CRITICAL for skew that
+                    # amounts to picoseconds at its own frequencies.
+                    sev = Severity.SUGGESTION
+                    title = (
+                        f"Differential pair '{base}' has {skew:.2f} mm skew "
+                        "(signal speed unknown)"
+                    )
+                    recommendation = (
+                        f"If '{base}' carries fast edges (hundreds of MHz or more), add "
+                        f"{skew:.2f} mm to '{shorter_net}'. For low-frequency or analog "
+                        "signals, length matching is not needed; keep the two traces "
+                        "together and symmetric so noise couples into both equally."
+                    )
 
                 findings.append(
                     Finding(
                         id=f"DIFF-SKEW-{base.upper()}",
-                        title=f"Differential pair skew on '{base}' ({skew:.2f} mm mismatch)",
+                        title=title,
                         severity=sev,
                         category=FindingCategory.SIGNAL_INTEGRITY,
                         description=(
@@ -149,12 +198,10 @@ class DifferentialPairSkewRule(BaseRule):
                         coordinates=[coord],
                         rationale=(
                             "Length mismatch between differential traces converts differential signaling "
-                            "into common-mode noise, degrading receiver eye diagram and emitting EMI radiation."
+                            "into common-mode noise, degrading receiver eye diagram and emitting EMI radiation. "
+                            "The effect scales with edge rate: 1 mm is roughly 6-7 ps."
                         ),
-                        recommendation=(
-                            f"Apply length tuning (meanders/serpentines) to shorter net '{shorter_net}' "
-                            f"to add {skew:.2f} mm and achieve skew < {max_skew:.2f} mm."
-                        ),
+                        recommendation=recommendation,
                         raw_data={
                             "base_name": base,
                             "net_p": net_p,
@@ -163,6 +210,7 @@ class DifferentialPairSkewRule(BaseRule):
                             "length_n_mm": round(len_n, 3),
                             "skew_mm": round(skew, 3),
                             "max_skew_threshold_mm": max_skew,
+                            "high_speed_interface": high_speed,
                         },
                     )
                 )
