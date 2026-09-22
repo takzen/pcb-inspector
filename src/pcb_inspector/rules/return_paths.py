@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import shapely
 from shapely.geometry import LineString, Polygon
 from shapely.ops import unary_union
-from shapely.validation import make_valid
 
 from pcb_inspector.core.config import InspectorConfig
 from pcb_inspector.core.models import Coordinate, Finding, FindingCategory, Severity
@@ -98,6 +98,12 @@ class GroundPlaneIntegrityRule(BaseRule):
         if not planes_by_layer:
             return findings
 
+        # Prepared geometry answers covers() through a spatial index. Without
+        # it every segment was intersected against the full plane outline, which
+        # took 144s on a 26,650-track board while every other rule took under 1s.
+        for plane in planes_by_layer.values():
+            shapely.prepare(plane)
+
         zone_layers = set(planes_by_layer)
         unreferenced: list[TrackSegment] = []
 
@@ -111,10 +117,18 @@ class GroundPlaneIntegrityRule(BaseRule):
                 continue
 
             line = LineString([(t.start_x, t.start_y), (t.end_x, t.end_y)])
+
+            # Fast path: a segment lying wholly over one plane is referenced,
+            # and on a well-routed board that is almost every segment. The
+            # exact overlap is only measured for the rest, so results are
+            # identical to measuring all of them.
+            if any(planes_by_layer[layer].covers(line) for layer in candidates):
+                continue
+
             # The whole segment is measured, not its midpoint: a long trace can
             # leave the plane at both ends while its centre still sits over it.
             covered = max(
-                line.intersection(planes_by_layer[layer]).length for layer in candidates
+                self._covered_length(line, planes_by_layer[layer]) for layer in candidates
             )
             if covered < line.length * min_fraction:
                 unreferenced.append(t)
@@ -123,6 +137,27 @@ class GroundPlaneIntegrityRule(BaseRule):
             findings.append(self._unreferenced_finding(unreferenced, min_fraction))
 
         return findings
+
+    @staticmethod
+    def _covered_length(line: LineString, plane: Any) -> float:
+        """Length of ``line`` lying over ``plane``.
+
+        The plane is first clipped to the segment's bounding box. Inner planes
+        on a dense board run to 126,000 vertices, and a general intersection
+        against all of them cost 33ms per segment; clip_by_rect is a
+        specialised clipper that makes the same measurement 10x faster.
+        Verified against the direct intersection on 251 segments of a
+        26,650-track board: largest difference 6e-14 mm, same decision on all.
+        """
+        x0, y0, x1, y1 = line.bounds
+        pad = 0.01
+        window = shapely.clip_by_rect(plane, x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+        if window.is_empty:
+            return 0.0
+        # Clipping may return an invalid polygon; repair rather than trust it.
+        if not window.is_valid:
+            window = shapely.make_valid(window, method="structure")
+        return float(line.intersection(window).length)
 
     @staticmethod
     def _to_polygon(points: list[tuple[float, float]]) -> Polygon | Any | None:
@@ -139,7 +174,15 @@ class GroundPlaneIntegrityRule(BaseRule):
             if poly.is_empty:
                 return None
             if not poly.is_valid:
-                poly = make_valid(poly)
+                # KiCad encodes holes in a filled zone with keyhole cuts, a ring
+                # that touches itself along each cut, which GEOS reports as
+                # invalid. The "structure" repair reads rings as shells and holes,
+                # which is exactly that intent. The default "linework" repair took
+                # 3s per 123k-vertex plane (12s of a 15s rule run); "structure"
+                # gives the same area to 2e-16 in a tenth of the time. buffer(0)
+                # is faster still but keeps only one lobe of a self-crossing
+                # outline, silently discarding real copper.
+                poly = shapely.make_valid(poly, method="structure")
             return None if poly.is_empty else poly
         except Exception as err:  # pragma: no cover - shapely edge cases
             logger.debug("Skipping unusable ground zone polygon: %s", err)
