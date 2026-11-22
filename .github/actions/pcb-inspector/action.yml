@@ -63,8 +63,42 @@ runs:
         set -euo pipefail
         sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
         sudo apt-get update
-        sudo apt-get install --yes --no-install-recommends kicad
-        kicad-cli version
+        candidate=$(apt-cache policy kicad | awk '/Candidate:/ {print $2}')
+        case "$candidate" in
+          1[0-9].*)
+            sudo apt-get install --yes --no-install-recommends kicad
+            ;;
+          *)
+            # Ubuntu 26.04 runners read the amd64v3 index of every source that
+            # lists one. The KiCad PPA lists it but publishes only documentation
+            # there, so apt offers the distribution's KiCad ($candidate). Take
+            # KiCad 10 from the PPA's plain index instead, checked against the
+            # signed Release file apt has already verified.
+            ppa=https://ppa.launchpadcontent.net/kicad/kicad-10.0-releases/ubuntu
+            codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+            index="main/binary-$(dpkg --print-architecture)/Packages.gz"
+            release=/var/lib/apt/lists/ppa.launchpadcontent.net_kicad_kicad-10.0-releases_ubuntu_dists_${codename}_InRelease
+            work=$(mktemp -d)
+            curl -fsSL "$ppa/dists/$codename/$index" -o "$work/Packages.gz"
+            want=$(awk -v f="$index" '/^SHA256:/ {s=1; next} /^[^ ]/ {s=0} s && $3 == f {print $1}' "$release")
+            echo "$want  $work/Packages.gz" | sha256sum --check --quiet
+            entry=$(gunzip -c "$work/Packages.gz" | awk -v RS= '/^Package: kicad\n/')
+            file=$(printf '%s\n' "$entry" | awk '/^Filename:/ {print $2}')
+            sum=$(printf '%s\n' "$entry" | awk '/^SHA256:/ {print $2}')
+            curl -fsSL "$ppa/$file" -o "$work/kicad.deb"
+            echo "$sum  $work/kicad.deb" | sha256sum --check --quiet
+            sudo apt-get install --yes --no-install-recommends "$work/kicad.deb"
+            ;;
+        esac
+        version=$(kicad-cli version)
+        echo "kicad-cli $version"
+        case "$version" in
+          1[0-9].*) ;;
+          *)
+            echo "::error::KiCad 10 or newer is needed to open boards saved by KiCad 10; got $version"
+            exit 1
+            ;;
+        esac
 
     # From the action's own checkout. "." is the calling repository, which in a
     # hardware project holds the boards, not this tool.

@@ -23,16 +23,20 @@ on:
 
 jobs:
   flawed-board:
-    name: Flags a flawed board (${{ matrix.format }})
-    runs-on: ubuntu-latest
+    name: Flags a flawed board (${{ matrix.format }}, ${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
+      # The two runners take different paths to KiCad 10: on 24.04 apt finds it
+      # in the PPA, on 26.04 the action fetches it from the PPA's plain index.
       matrix:
         include:
           - format: "KiCad 8 file"
             board: "tests/golden_samples/flawed_board"
+            runner: ubuntu-24.04
           - format: "KiCad 10 file"
             board: "tests/golden_samples/kicad10_format/flawed_board.kicad_pcb"
+            runner: ubuntu-latest
 
     steps:
       - name: Checkout Repository
