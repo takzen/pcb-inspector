@@ -10,7 +10,7 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
-  <a href="https://github.com/takzen/pcb-inspector/releases/tag/v0.2.0"><img src="https://img.shields.io/badge/Release-v0.2.0-blue?style=flat-square" alt="Release: v0.2.0"></a>
+  <a href="https://github.com/takzen/pcb-inspector/releases/tag/v0.2.1"><img src="https://img.shields.io/badge/Release-v0.2.1-blue?style=flat-square" alt="Release: v0.2.1"></a>
   <a href="#"><img src="https://img.shields.io/badge/Tests-422%20passed%20%7C%2091%25-brightgreen?style=flat-square" alt="Tests: 422 passed"></a>
   <a href="https://kicad.org"><img src="https://img.shields.io/badge/KiCad-8.0%2B%20%7C%209.0%20%7C%2010-314CB6?style=flat-square&logo=kicad&logoColor=white" alt="KiCad Support"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
@@ -26,7 +26,7 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 </div>
 
 > [!NOTE]
-> **`pcb-inspector` v0.2.0 is now live!**  
+> **`pcb-inspector` v0.2.1 is now live!**  
 > The 3-layer verification engine, built-in MCP server, interactive HTML reporting, and GitHub Action are fully functional.
 > New in v0.2.0: live audits of the board open in KiCad 10, the KiCad 10 file format, schematic parity checks, and fewer false positives on real boards. Check out the [📖 User Manual & Configuration Guide (MANUAL.md)](MANUAL.md) for practical examples, rule catalog, and per-project override guides.
 
@@ -324,6 +324,10 @@ When launched with `pcb-inspector mcp`, the server provides:
 - [x] Findings correlation, ground-reference check and watch mode made fast enough for
   26,000-track boards
 - [x] HTML report search and category filtering; smoke tests over KiCad's own demo boards
+
+### v0.2.1 (Released)
+- [x] The GitHub Action installs KiCad 10 on Ubuntu 26.04 runners (`ubuntu-latest`), where apt
+  offered only the distribution's KiCad 9, and stops with a clear error if `kicad-cli` is older
 
 ### Future Enhancements (v0.3.0+)
 - [ ] Thermal rule: heat-sensitive parts near power dissipation hot spots
