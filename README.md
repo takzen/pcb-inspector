@@ -10,8 +10,8 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
-  <a href="https://github.com/takzen/pcb-inspector/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/Release-v0.1.0-blue?style=flat-square" alt="Release: v0.1.0"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-422%20passed%20%7C%2090%25-brightgreen?style=flat-square" alt="Tests: 422 passed"></a>
+  <a href="https://github.com/takzen/pcb-inspector/releases/tag/v0.2.0"><img src="https://img.shields.io/badge/Release-v0.2.0-blue?style=flat-square" alt="Release: v0.2.0"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-422%20passed%20%7C%2091%25-brightgreen?style=flat-square" alt="Tests: 422 passed"></a>
   <a href="https://kicad.org"><img src="https://img.shields.io/badge/KiCad-8.0%2B%20%7C%209.0%20%7C%2010-314CB6?style=flat-square&logo=kicad&logoColor=white" alt="KiCad Support"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="#-mcp-server--agentic-integration"><img src="https://img.shields.io/badge/MCP%20Server-Supported-5B5EA6?style=flat-square" alt="MCP Server"></a>
@@ -26,8 +26,9 @@ Catch placement flaws, decoupling issues, routing problems, and mixed-signal des
 </div>
 
 > [!NOTE]
-> **`pcb-inspector` v0.1.0 is now live!**  
-> The 3-layer verification engine, built-in MCP server, interactive HTML reporting, and GitHub Action are fully functional. Check out the [📖 User Manual & Configuration Guide (MANUAL.md)](MANUAL.md) for practical examples, rule catalog, and per-project override guides.
+> **`pcb-inspector` v0.2.0 is now live!**  
+> The 3-layer verification engine, built-in MCP server, interactive HTML reporting, and GitHub Action are fully functional.
+> New in v0.2.0: live audits of the board open in KiCad 10, the KiCad 10 file format, schematic parity checks, and fewer false positives on real boards. Check out the [📖 User Manual & Configuration Guide (MANUAL.md)](MANUAL.md) for practical examples, rule catalog, and per-project override guides.
 
 ## 🎯 What is it?
 
@@ -292,7 +293,7 @@ When launched with `pcb-inspector mcp`, the server provides:
 - [x] KiCad 8 / 9 / 10 CLI automation wrappers (`kicad-cli`) & DRC/ERC JSON parsers
 - [x] Programmatic spatial & physical heuristics (decoupling, DC/DC loops, return paths, diff pairs, power traces)
 - [x] Multimodal vision inspection engine (Gemini Flash 3.8, Fable 5, GPT-6 Astra)
-- [x] Board renderer for vision review (superseded — see Unreleased)
+- [x] Board renderer for vision review (superseded — see v0.2.0)
 - [x] Built-in Model Context Protocol (MCP) Server (`pcb-inspector mcp`) for autonomous agent loops
 - [x] Konnect agentic closed-loop integration & `ActionableFix` auto-repair coordinates
 - [x] Continuous watch mode (`--watch`) for real-time iterative layout reviews
@@ -300,7 +301,7 @@ When launched with `pcb-inspector mcp`, the server provides:
 - [x] Reusable GitHub Action (`.github/actions/pcb-inspector`) for CI/CD pipelines
 - [x] Golden Sample reference benchmark boards (`clean_board` & `flawed_board`)
 
-### Unreleased — reliability and accuracy
+### v0.2.0 (Released) — reliability and accuracy
 - [x] Live audits of the board open in KiCad 10 (`--live`, MCP `live=true`), so a repair loop
   driven through Konnect sees its own unsaved edits
 - [x] Vision reads its API key from `.env` too, accepts `GOOGLE_API_KEY` as Google's own tools
@@ -324,7 +325,7 @@ When launched with `pcb-inspector mcp`, the server provides:
   26,000-track boards
 - [x] HTML report search and category filtering; smoke tests over KiCad's own demo boards
 
-### Future Enhancements (v0.2.0+)
+### Future Enhancements (v0.3.0+)
 - [ ] Thermal rule: heat-sensitive parts near power dissipation hot spots
 - [ ] Analog/digital separation: analog traces crossing digital buses or plane splits
 - [ ] Via current capacity and copper-weight-aware trace width

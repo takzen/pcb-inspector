@@ -1,6 +1,6 @@
 """pcb-inspector: Automated Multimodal Design Reviewer & Linter for KiCad Projects."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Krzysztof Pika"
 
 from pcb_inspector.core.models import (

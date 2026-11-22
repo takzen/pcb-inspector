@@ -6,6 +6,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from pcb_inspector import __version__
 from pcb_inspector.cli.main import app
 
 runner = CliRunner()
@@ -23,7 +24,7 @@ def test_cli_help() -> None:
 def test_cli_version() -> None:
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "v0.1.0" in result.stdout
+    assert f"v{__version__}" in result.stdout
 
 
 def test_cli_rules() -> None:
