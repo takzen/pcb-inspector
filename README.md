@@ -94,25 +94,25 @@ pcb-inspector mcp --transport stdio
 
 ```mermaid
 flowchart TD
-    subgraph Input ["📥 Design Input"]
-        SCH["📄 Schematic Files (.kicad_sch)"]
-        PCB["📐 PCB Layout (.kicad_pcb)"]
+    subgraph Input ["📥 Design input"]
+        SCH["📄 Schematic<br/>.kicad_sch"]
+        PCB["📐 PCB layout<br/>.kicad_pcb"]
     end
 
-    subgraph Pipeline ["🔍 pcb-inspector Verification Engine"]
+    subgraph Pipeline ["🔍 Verification engine"]
         direction TB
-        L1["1️⃣ Deterministic Ground Truth<br/><code>kicad-cli</code> (ERC & DRC checks)"]
-        L2["2️⃣ Programmatic Engineering Heuristics<br/>(Decoupling, loop areas, return paths)"]
-        L3["3️⃣ Multimodal Visual Review<br/>(Vision LLM on 2D/3D renders)"]
-        
+        L1["1️⃣ Ground truth<br/>kicad-cli<br/>ERC and DRC"]
+        L2["2️⃣ Heuristics<br/>decoupling,<br/>loop areas,<br/>return paths"]
+        L3["3️⃣ Vision review<br/>LLM on<br/>board renders"]
+        Aggregator["⚡ Aggregate<br/>and prioritise"]
+
         L1 --> Aggregator
         L2 --> Aggregator
         L3 --> Aggregator
-        Aggregator["⚡ Findings Aggregator & Prioritizer"]
     end
 
-    subgraph Output ["📋 Actionable Report"]
-        Report["🔴 CRITICAL • 🟠 WARNING • 🟡 SUGGESTION • 🟢 PASS<br/>Coordinates • Net Names • Evidence • Fix Instructions"]
+    subgraph Output ["📋 Report"]
+        Report["🔴 CRITICAL<br/>🟠 WARNING<br/>🟡 SUGGESTION<br/>🟢 PASS<br/>coordinates, nets,<br/>evidence, fixes"]
     end
 
     Input --> Pipeline
